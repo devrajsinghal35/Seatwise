@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: seatwise-api
+    env: node
+    rootDir: server
+    buildCommand: npm install
+    startCommand: npm run seed && npm start
+    disk:
+      name: data
+      mountPath: /opt/render/project/src/server/data
+      sizeGB: 1
+    envVars:
+      - key: DATABASE_FILE
+        value: /opt/render/project/src/server/data/seatwise.db
+      - key: PORT
+        value: 4000
+      - key: JWT_SECRET
+        generateValue: true
+      - key: MAIL_FROM
+        value: "SeatWise <devrajsinghal61@gmail.com>"
+      - key: BREVO_API_KEY
+        sync: false
+      - key: PUBLIC_URL
+        sync: false
