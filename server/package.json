@@ -1,0 +1,22 @@
+{
+  "name": "seatwise-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "SeatWise ticket booking API",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "seed": "node src/db/seed.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3",
+    "qrcode": "^1.5.4"
+  }
+}
