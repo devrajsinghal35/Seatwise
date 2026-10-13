@@ -24,9 +24,16 @@ export const Booking = () => {
   const [info, setInfo] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const [guestName, setGuestName] = useState('');
+  const [guestName, setGuestName] = useState(user?.name ?? '');
   const [guestMobile, setGuestMobile] = useState('');
-  const [guestEmail, setGuestEmail] = useState('');
+  const [guestEmail, setGuestEmail] = useState(user?.email ?? '');
+
+  useEffect(() => {
+    if (user) {
+      setGuestName((prev) => prev || user.name || '');
+      setGuestEmail((prev) => prev || user.email || '');
+    }
+  }, [user]);
 
   // Reused across retries of the same checkout so a double submit cannot
   // produce two bookings.
@@ -206,7 +213,10 @@ export const Booking = () => {
 
       {!user && (
         <Notice kind="info">
-          <Link to="/signin">Sign in</Link> to hold and book seats.
+          <Link to="/signin" state={{ from: `/shows/${showId}` }}>
+            Sign in
+          </Link>{' '}
+          to hold and book seats.
         </Notice>
       )}
 

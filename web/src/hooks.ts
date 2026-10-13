@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { API_URL } from './api';
 
 /** Milliseconds left until `target`, refreshed every second. Null target stops the clock. */
 export const useCountdown = (target: number | null) => {
@@ -37,7 +38,7 @@ export const useSeatStream = (showId: number | null, onChanges: (changes: SeatCh
   useEffect(() => {
     if (!showId) return;
 
-    const source = new EventSource(`/api/shows/${showId}/stream`);
+    const source = new EventSource(`${API_URL}/api/shows/${showId}/stream`);
 
     source.addEventListener('open', () => setConnected(true));
     source.addEventListener('error', () => setConnected(false));

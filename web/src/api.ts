@@ -20,7 +20,7 @@ export class ApiError extends Error {
 
 type Options = { method?: string; body?: unknown; headers?: Record<string, string> };
 
-const API_URL = import.meta.env.VITE_API_URL || '';
+export const API_URL = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
 
 const request = async <T>(path: string, { method = 'GET', body, headers }: Options = {}): Promise<T> => {
   const token = getToken();

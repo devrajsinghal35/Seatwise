@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { ApiError } from '../api';
 import { useAuth } from '../auth';
 import { Notice } from '../components/Notice';
@@ -11,9 +11,19 @@ const DEMO_ACCOUNTS = [
   { email: 'admin@seatwise.test', role: 'Admin' },
 ];
 
+const getSafeRedirectPath = (from: unknown): string | null => {
+  if (typeof from !== 'string') return null;
+  // Ensure path is internal: starts with single '/', not protocol-relative '//', no schemes or backslashes
+  if (from.startsWith('/') && !from.startsWith('//') && !from.includes('://') && !from.includes('\\')) {
+    return from;
+  }
+  return null;
+};
+
 export const SignIn = () => {
   const { signIn, signUp } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
 
   const [mode, setMode] = useState<'signin' | 'signup'>('signin');
   const [email, setEmail] = useState('');
@@ -30,7 +40,10 @@ export const SignIn = () => {
 
     try {
       const user = mode === 'signin' ? await signIn(email, password) : await signUp({ email, password, name, role });
-      navigate(user.role === 'organiser' ? '/organiser' : user.role === 'admin' ? '/venues' : '/', { replace: true });
+      const stateFrom = (location.state as { from?: string } | null)?.from;
+      const safeFrom = getSafeRedirectPath(stateFrom);
+      const defaultTarget = user.role === 'organiser' ? '/organiser' : user.role === 'admin' ? '/venues' : '/';
+      navigate(safeFrom || defaultTarget, { replace: true });
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not sign in. Please try again.');
     } finally {
