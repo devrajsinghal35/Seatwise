@@ -6,6 +6,9 @@ import { subscribe } from '../services/realtime.js';
 import { activeHold, categorySummary, holdSeats, readSeatMap, releaseHeldSeats } from '../services/seats.js';
 import { qrDataUrl } from '../services/qr.js';
 
+import { holdLimiter } from '../lib/rateLimit.js';
+import { bookingSchema, holdSchema, validateBody } from '../lib/validation.js';
+
 export const bookingRoutes = Router();
 
 // --- Seat map -------------------------------------------------------------
@@ -24,10 +27,17 @@ bookingRoutes.get('/shows/:id/stream', (req, res) => subscribe(Number(req.params
 
 // --- Holds ----------------------------------------------------------------
 
-bookingRoutes.post('/shows/:id/hold', authenticate, requireRole('customer'), (req, res) => {
-  const { seatIds } = requireFields(req.body, ['seatIds']);
-  res.json({ hold: holdSeats(Number(req.params.id), req.user.id, seatIds) });
-});
+bookingRoutes.post(
+  '/shows/:id/hold',
+  holdLimiter,
+  authenticate,
+  requireRole('customer'),
+  validateBody(holdSchema),
+  (req, res) => {
+    const { seatIds } = req.body;
+    res.json({ hold: holdSeats(Number(req.params.id), req.user.id, seatIds) });
+  }
+);
 
 bookingRoutes.delete('/shows/:id/hold', authenticate, requireRole('customer'), async (req, res) => {
   const result = await releaseHeldSeats(Number(req.params.id), req.user.id, req.body?.seatIds ?? []);
@@ -36,13 +46,19 @@ bookingRoutes.delete('/shows/:id/hold', authenticate, requireRole('customer'), a
 
 // --- Bookings -------------------------------------------------------------
 
-bookingRoutes.post('/bookings', authenticate, requireRole('customer'), async (req, res) => {
-  const { showId, guestName, guestMobile, guestEmail } = requireFields(req.body, ['showId', 'guestName', 'guestMobile', 'guestEmail']);
-  // A retried submit reuses this key and gets the original booking back.
-  const idempotencyKey = req.get('idempotency-key') || req.body.idempotencyKey || null;
-  const booking = await checkout(Number(showId), req.user.id, idempotencyKey, guestName, guestMobile, guestEmail);
-  res.status(201).json({ booking });
-});
+bookingRoutes.post(
+  '/bookings',
+  authenticate,
+  requireRole('customer'),
+  validateBody(bookingSchema),
+  async (req, res) => {
+    const { showId, guestName, guestMobile, guestEmail } = req.body;
+    // A retried submit reuses this key and gets the original booking back.
+    const idempotencyKey = req.get('idempotency-key') || req.body.idempotencyKey || null;
+    const booking = await checkout(Number(showId), req.user.id, idempotencyKey, guestName, guestMobile, guestEmail);
+    res.status(201).json({ booking });
+  }
+);
 
 bookingRoutes.get('/bookings', authenticate, (req, res) => res.json({ bookings: listBookings(req.user.id) }));
 

@@ -4,13 +4,21 @@ import { requireFields } from '../lib/http.js';
 import { claimWaitlistOffer } from '../services/bookings.js';
 import { joinWaitlist, leaveWaitlist, listWaitlistForUser, readOffer } from '../services/waitlist.js';
 
+import { validateBody, waitlistSchema } from '../lib/validation.js';
+
 export const waitlistRoutes = Router();
 
-waitlistRoutes.post('/shows/:id/waitlist', authenticate, requireRole('customer'), (req, res) => {
-  const { categoryId } = requireFields(req.body, ['categoryId']);
-  const entry = joinWaitlist(Number(req.params.id), Number(categoryId), req.user.id);
-  res.status(entry.alreadyQueued ? 200 : 201).json({ entry });
-});
+waitlistRoutes.post(
+  '/shows/:id/waitlist',
+  authenticate,
+  requireRole('customer'),
+  validateBody(waitlistSchema),
+  (req, res) => {
+    const { categoryId } = req.body;
+    const entry = joinWaitlist(Number(req.params.id), Number(categoryId), req.user.id);
+    res.status(entry.alreadyQueued ? 200 : 201).json({ entry });
+  }
+);
 
 waitlistRoutes.get('/waitlist', authenticate, (req, res) =>
   res.json({ entries: listWaitlistForUser(req.user.id) })

@@ -1,13 +1,15 @@
 /** An error carrying the status code and machine-readable code to send back. */
 export class ApiError extends Error {
-  constructor(status, code, message) {
+  constructor(status, code, message, details = null) {
     super(message);
     this.status = status;
     this.code = code;
+    this.details = details;
   }
 }
 
-export const badRequest = (message, code = 'invalid_request') => new ApiError(400, code, message);
+export const badRequest = (message, code = 'invalid_request', details = null) =>
+  new ApiError(400, code, message, details);
 export const notFound = (message, code = 'not_found') => new ApiError(404, code, message);
 export const conflict = (message, code = 'conflict') => new ApiError(409, code, message);
 
@@ -28,7 +30,9 @@ export const errorHandler = (err, req, res, next) => {
   if (res.headersSent) return next(err);
 
   if (err instanceof ApiError) {
-    return res.status(err.status).json({ error: err.code, message: err.message });
+    const payload = { error: err.code, message: err.message };
+    if (err.details) payload.details = err.details;
+    return res.status(err.status).json(payload);
   }
 
   // A constraint we deliberately rely on tripping is still a conflict, not a crash.

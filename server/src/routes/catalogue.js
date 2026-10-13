@@ -6,6 +6,8 @@ import {
 } from '../services/catalogue.js';
 import { eventSummary, organiserEvents } from '../services/reports.js';
 
+import { eventSchema, showSchema, validateBody, venueSchema } from '../lib/validation.js';
+
 export const catalogueRoutes = Router();
 
 // --- Venues (admin) -------------------------------------------------------
@@ -13,9 +15,8 @@ export const catalogueRoutes = Router();
 catalogueRoutes.get('/venues', (req, res) => res.json({ venues: listVenues() }));
 catalogueRoutes.get('/venues/:id', (req, res) => res.json({ venue: getVenue(Number(req.params.id)) }));
 
-catalogueRoutes.post('/venues', authenticate, requireRole('admin'), (req, res) => {
-  const { name, city } = requireFields(req.body, ['name', 'city']);
-  const venue = createVenue({ name, city, categories: req.body.categories, rows: req.body.rows }, req.user.id);
+catalogueRoutes.post('/venues', authenticate, requireRole('admin'), validateBody(venueSchema), (req, res) => {
+  const venue = createVenue(req.body, req.user.id);
   res.status(201).json({ venue });
 });
 
@@ -28,9 +29,8 @@ catalogueRoutes.get('/events', (req, res) => {
 
 catalogueRoutes.get('/events/:id', (req, res) => res.json({ event: getEvent(Number(req.params.id)) }));
 
-catalogueRoutes.post('/events', authenticate, requireRole('organiser'), (req, res) => {
-  const { title, kind } = requireFields(req.body, ['title', 'kind']);
-  const event = createEvent({ ...req.body, title, kind }, req.user.id);
+catalogueRoutes.post('/events', authenticate, requireRole('organiser'), validateBody(eventSchema), (req, res) => {
+  const event = createEvent(req.body, req.user.id);
   res.status(201).json({ event });
 });
 
@@ -40,9 +40,8 @@ catalogueRoutes.get('/cities', (req, res) => res.json({ cities: listCities() }))
 
 catalogueRoutes.get('/shows/:id', (req, res) => res.json({ show: getShow(Number(req.params.id)) }));
 
-catalogueRoutes.post('/shows', authenticate, requireRole('organiser'), (req, res) => {
-  const { eventId, venueId, startsAt } = requireFields(req.body, ['eventId', 'venueId', 'startsAt']);
-  const show = createShow({ eventId: Number(eventId), venueId: Number(venueId), startsAt, prices: req.body.prices }, req.user.id);
+catalogueRoutes.post('/shows', authenticate, requireRole('organiser'), validateBody(showSchema), (req, res) => {
+  const show = createShow(req.body, req.user.id);
   res.status(201).json({ show });
 });
 

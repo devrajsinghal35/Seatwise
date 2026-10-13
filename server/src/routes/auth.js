@@ -4,18 +4,13 @@ import { authenticate, signToken } from '../lib/auth.js';
 import { ApiError, badRequest, conflict, requireFields } from '../lib/http.js';
 import { hashPassword, verifyPassword } from '../lib/passwords.js';
 
+import { authLimiter } from '../lib/rateLimit.js';
+import { loginSchema, registerSchema, validateBody } from '../lib/validation.js';
+
 export const authRoutes = Router();
 
-// Admins are created by seeding, so nobody can grant themselves that role.
-const SELF_SERVE_ROLES = ['customer', 'organiser'];
-
-authRoutes.post('/register', (req, res) => {
-  const { email, password, name } = requireFields(req.body, ['email', 'password', 'name']);
-  const role = req.body.role || 'customer';
-
-  if (!SELF_SERVE_ROLES.includes(role)) throw badRequest('Role must be "customer" or "organiser".');
-  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw badRequest('Enter a valid email address.');
-  if (password.length < 8) throw badRequest('Use a password of at least 8 characters.');
+authRoutes.post('/register', authLimiter, validateBody(registerSchema), (req, res) => {
+  const { email, password, name, role = 'customer' } = req.body;
 
   const normalised = email.toLowerCase();
   if (db.prepare('SELECT 1 FROM users WHERE email = ?').get(normalised)) {
@@ -31,8 +26,8 @@ authRoutes.post('/register', (req, res) => {
   res.status(201).json({ token: signToken(user), user });
 });
 
-authRoutes.post('/login', (req, res) => {
-  const { email, password } = requireFields(req.body, ['email', 'password']);
+authRoutes.post('/login', authLimiter, validateBody(loginSchema), (req, res) => {
+  const { email, password } = req.body;
 
   const record = db.prepare('SELECT * FROM users WHERE email = ?').get(email.toLowerCase());
   // Same response either way, so the endpoint does not reveal which emails exist.
