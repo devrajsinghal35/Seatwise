@@ -8,12 +8,21 @@ import { join } from 'node:path';
  * config.js and db/index.js both read their settings at import time, so the
  * environment has to be set before the dynamic imports below.
  */
-export const startTestServer = async ({ holdTtlSeconds = 600, offerTtlSeconds = 300 } = {}) => {
+export const startTestServer = async ({
+  holdTtlSeconds = 600,
+  offerTtlSeconds = 300,
+  rateLimitAuthMax = 10,
+  rateLimitHoldMax = 30,
+  corsOrigins = 'http://localhost:5173',
+} = {}) => {
   const dir = mkdtempSync(join(tmpdir(), 'seatwise-test-'));
 
   process.env.DATABASE_FILE = join(dir, 'test.db');
   process.env.HOLD_TTL_SECONDS = String(holdTtlSeconds);
   process.env.OFFER_TTL_SECONDS = String(offerTtlSeconds);
+  process.env.RATE_LIMIT_AUTH_MAX = String(rateLimitAuthMax);
+  process.env.RATE_LIMIT_HOLD_MAX = String(rateLimitHoldMax);
+  process.env.CORS_ORIGINS = String(corsOrigins);
   process.env.JWT_SECRET = 'test-secret';
   process.env.BREVO_API_KEY = '';
   process.env.MAIL_OUTBOX = join(dir, 'outbox');
@@ -24,18 +33,26 @@ export const startTestServer = async ({ holdTtlSeconds = 600, offerTtlSeconds = 
 
   const base = `http://127.0.0.1:${server.address().port}`;
 
-  const call = async (method, path, { token, body, headers } = {}) => {
+  const call = async (method, path, { token, body: reqBody, headers } = {}) => {
     const res = await fetch(base + path, {
       method,
       headers: {
-        ...(body ? { 'Content-Type': 'application/json' } : {}),
+        ...(reqBody ? { 'Content-Type': 'application/json' } : {}),
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
         ...headers,
       },
-      body: body ? JSON.stringify(body) : undefined,
+      body: reqBody ? JSON.stringify(reqBody) : undefined,
     });
     const text = await res.text();
-    return { status: res.status, body: text ? JSON.parse(text) : null };
+    let body = null;
+    if (text) {
+      try {
+        body = JSON.parse(text);
+      } catch {
+        body = text;
+      }
+    }
+    return { status: res.status, headers: res.headers, body };
   };
 
   return {
@@ -43,6 +60,7 @@ export const startTestServer = async ({ holdTtlSeconds = 600, offerTtlSeconds = 
     get: (path, opts) => call('GET', path, opts),
     post: (path, body, opts) => call('POST', path, { ...opts, body }),
     del: (path, body, opts) => call('DELETE', path, { ...opts, body }),
+    options: (path, opts) => call('OPTIONS', path, opts),
     close: async () => {
       await new Promise((done) => server.close(done));
       rmSync(dir, { recursive: true, force: true });

@@ -16,12 +16,21 @@ export const createLimiter = (options = {}) =>
 
 export const authLimiter = createLimiter({
   windowMs: config.rateLimit.authWindowMs,
-  limit: config.rateLimit.authMax,
+  limit: () => config.rateLimit.authMax,
   message: { error: 'rate_limited', message: 'Too many authentication attempts. Please try again later.' },
 });
 
 export const holdLimiter = createLimiter({
   windowMs: config.rateLimit.holdWindowMs,
-  limit: config.rateLimit.holdMax,
+  limit: () => config.rateLimit.holdMax,
   message: { error: 'rate_limited', message: 'Too many hold attempts. Please try again later.' },
 });
+
+export const resetLimiters = async (ip = '127.0.0.1') => {
+  await Promise.allSettled([
+    authLimiter.resetKey(ip),
+    holdLimiter.resetKey(ip),
+  ]);
+};
+
+

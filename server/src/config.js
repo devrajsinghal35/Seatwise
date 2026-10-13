@@ -16,16 +16,23 @@ const num = (value, fallback) => {
 export const DEV_JWT_SECRET = 'seatwise-dev-secret-change-me';
 
 const isProduction = process.env.NODE_ENV === 'production';
-if (isProduction && (!process.env.JWT_SECRET || process.env.JWT_SECRET === DEV_JWT_SECRET)) {
+const isDevSecret =
+  !process.env.JWT_SECRET ||
+  process.env.JWT_SECRET === DEV_JWT_SECRET ||
+  process.env.JWT_SECRET === 'change-this-to-a-long-random-string';
+
+if (isProduction && isDevSecret) {
   throw new Error('JWT_SECRET must be set to a secure secret in production.');
 }
 
 export const config = {
   port: num(process.env.PORT, 4000),
-  corsOrigins: (process.env.CORS_ORIGINS || 'http://localhost:5173')
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean),
+  get corsOrigins() {
+    return (process.env.CORS_ORIGINS || 'http://localhost:5173')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+  },
   jwtSecret: process.env.JWT_SECRET || DEV_JWT_SECRET,
   tokenTtl: process.env.TOKEN_TTL || '12h',
 
@@ -38,10 +45,18 @@ export const config = {
   sweepIntervalSeconds: num(process.env.SWEEP_INTERVAL_SECONDS, 5),
 
   rateLimit: {
-    authMax: num(process.env.RATE_LIMIT_AUTH_MAX, 10),
-    authWindowMs: num(process.env.RATE_LIMIT_AUTH_WINDOW_MS, 60 * 1000),
-    holdMax: num(process.env.RATE_LIMIT_HOLD_MAX, 30),
-    holdWindowMs: num(process.env.RATE_LIMIT_HOLD_WINDOW_MS, 60 * 1000),
+    get authMax() {
+      return num(process.env.RATE_LIMIT_AUTH_MAX, 10);
+    },
+    get authWindowMs() {
+      return num(process.env.RATE_LIMIT_AUTH_WINDOW_MS, 60 * 1000);
+    },
+    get holdMax() {
+      return num(process.env.RATE_LIMIT_HOLD_MAX, 30);
+    },
+    get holdWindowMs() {
+      return num(process.env.RATE_LIMIT_HOLD_WINDOW_MS, 60 * 1000);
+    },
   },
 
   // Used to build the claim link that goes in the waitlist offer email.
