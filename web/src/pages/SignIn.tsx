@@ -115,20 +115,32 @@ export const SignIn = () => {
         </button>
       </p>
 
-      <div className="card demo-accounts">
-        <h2>Demo accounts</h2>
-        <p className="muted">Seeded by <code>npm run seed</code>. The password for all of them is Password123.</p>
-        <ul>
-          {DEMO_ACCOUNTS.map((account) => (
-            <li key={account.email}>
-              <button type="button" className="link" onClick={() => useDemo(account.email)}>
-                {account.email}
-              </button>
-              <span className="muted"> {account.role}</span>
-            </li>
-          ))}
-        </ul>
-      </div>
+      {import.meta.env.VITE_SHOW_DEMO === 'true' && (
+        <details className="card demo-drawer">
+          <summary className="demo-drawer-summary">
+            <strong>Try a demo account</strong>
+            <span className="muted small">One-click fill</span>
+          </summary>
+          <div className="demo-drawer-body">
+            <p className="muted small">
+              Pre-seeded test accounts for testing. All use password <code>Password123</code>.
+            </p>
+            <div className="demo-grid">
+              {DEMO_ACCOUNTS.map((account) => (
+                <button
+                  type="button"
+                  key={account.email}
+                  className="button ghost small demo-btn"
+                  onClick={() => useDemo(account.email)}
+                >
+                  <span className="demo-role">{account.role}</span>
+                  <span className="demo-email muted">{account.email}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </details>
+      )}
     </div>
   );
 };

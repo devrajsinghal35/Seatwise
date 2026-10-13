@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ApiError, api } from '../api';
+import { EmptyState, ErrorBanner } from '../components/EmptyState';
 import { Notice } from '../components/Notice';
+import { BookingsSkeleton } from '../components/Skeleton';
+import { useToast } from '../components/Toast';
 import { formatCountdown, formatDateTime, formatMoney } from '../format';
 import { useCountdown } from '../hooks';
 import type { Booking, WaitlistEntry } from '../types';
@@ -12,23 +15,33 @@ const OfferCountdown = ({ entry }: { entry: WaitlistEntry }) => {
 };
 
 export const MyBookings = () => {
+  const { toast } = useToast();
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [queue, setQueue] = useState<WaitlistEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<number | null>(null);
 
   const load = useCallback(async () => {
-    const [{ bookings: mine }, { entries }] = await Promise.all([
-      api.get<{ bookings: Booking[] }>('/bookings'),
-      api.get<{ entries: WaitlistEntry[] }>('/waitlist'),
-    ]);
-    setBookings(mine);
-    setQueue(entries);
+    setLoading(true);
+    setError(null);
+    try {
+      const [{ bookings: mine }, { entries }] = await Promise.all([
+        api.get<{ bookings: Booking[] }>('/bookings'),
+        api.get<{ entries: WaitlistEntry[] }>('/waitlist'),
+      ]);
+      setBookings(mine);
+      setQueue(entries);
+    } catch {
+      setError('Could not load your bookings.');
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
-    load().catch(() => setError('Could not load your bookings.'));
+    load();
   }, [load]);
 
   const cancel = async (booking: Booking) => {
@@ -39,14 +52,17 @@ export const MyBookings = () => {
     setInfo(null);
     try {
       const result = await api.post<{ seatsReoffered: number }>(`/bookings/${booking.id}/cancel`);
-      setInfo(
+      const msg =
         result.seatsReoffered > 0
-          ? `Booking cancelled. ${result.seatsReoffered} ${result.seatsReoffered === 1 ? 'seat was' : 'seats were'} offered to customers on the waitlist.`
-          : 'Booking cancelled and the seats are back on sale.'
-      );
+          ? `Booking cancelled. ${result.seatsReoffered} ${result.seatsReoffered === 1 ? 'seat was' : 'seats were'} offered to waitlist customers.`
+          : 'Booking cancelled and the seats are back on sale.';
+      setInfo(msg);
+      toast(msg, 'info');
       await load();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Could not cancel that booking.');
+      const msg = err instanceof ApiError ? err.message : 'Could not cancel that booking.';
+      setError(msg);
+      toast(msg, 'error');
     } finally {
       setBusyId(null);
     }
@@ -56,9 +72,12 @@ export const MyBookings = () => {
     setBusyId(entry.id);
     try {
       await api.del(`/waitlist/${entry.id}`);
+      toast('Left the waitlist queue.', 'info');
       await load();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Could not leave that waitlist.');
+      const msg = err instanceof ApiError ? err.message : 'Could not leave that waitlist.';
+      setError(msg);
+      toast(msg, 'error');
     } finally {
       setBusyId(null);
     }
@@ -66,13 +85,16 @@ export const MyBookings = () => {
 
   return (
     <>
-      <h1>My bookings</h1>
+      <header className="page-header">
+        <h1>My bookings</h1>
+        <p className="muted">Manage your tickets and active waitlist positions.</p>
+      </header>
 
-      {error && <Notice kind="error" onDismiss={() => setError(null)}>{error}</Notice>}
+      {error && <ErrorBanner message={error} onRetry={load} onDismiss={() => setError(null)} />}
       {info && <Notice kind="success" onDismiss={() => setInfo(null)}>{info}</Notice>}
 
       {queue.length > 0 && (
-        <section>
+        <section style={{ marginBottom: 32 }}>
           <h2>Waitlists</h2>
           <ul className="stack">
             {queue.map((entry) => (
@@ -95,10 +117,10 @@ export const MyBookings = () => {
                     </>
                   ) : (
                     <>
-                      <span className="small muted">Number {entry.position} in the queue</span>
+                      <span className="small muted">Number {entry.position} in queue</span>
                       <button
                         type="button"
-                        className="ghost small"
+                        className="button ghost small"
                         onClick={() => leaveQueue(entry)}
                         disabled={busyId === entry.id}
                       >
@@ -115,10 +137,18 @@ export const MyBookings = () => {
 
       <section>
         <h2>Tickets</h2>
-        {bookings.length === 0 ? (
-          <p className="muted">
-            You have not booked anything yet. <Link to="/">Browse what's on</Link>.
-          </p>
+        {loading && bookings.length === 0 ? (
+          <BookingsSkeleton />
+        ) : bookings.length === 0 ? (
+          <EmptyState
+            title="No tickets yet"
+            description="You have not booked any tickets yet. Explore what's on to discover movies and concerts."
+            action={
+              <Link className="button" to="/">
+                Browse what's on
+              </Link>
+            }
+          />
         ) : (
           <ul className="stack">
             {bookings.map((booking) => {
@@ -145,7 +175,7 @@ export const MyBookings = () => {
                         {!past && (
                           <button
                             type="button"
-                            className="ghost small danger"
+                            className="button ghost small danger"
                             onClick={() => cancel(booking)}
                             disabled={busyId === booking.id}
                           >

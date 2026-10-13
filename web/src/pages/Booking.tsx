@@ -2,8 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ApiError, api } from '../api';
 import { useAuth } from '../auth';
-import { Notice } from '../components/Notice';
 import { SeatMap } from '../components/SeatMap';
+import { SeatMapSkeleton } from '../components/Skeleton';
+import { useToast } from '../components/Toast';
 import { formatCountdown, formatDateTime, formatMoney } from '../format';
 import { useCountdown, useSeatStream } from '../hooks';
 import type { Booking as BookingType, CategorySummary, Hold, Seat, SeatMap as SeatMapData, ShowDetail, WaitlistEntry } from '../types';
@@ -13,6 +14,7 @@ export const Booking = () => {
   const showId = Number(showIdParam);
   const navigate = useNavigate();
   const { user } = useAuth();
+  const { toast } = useToast();
 
   const [show, setShow] = useState<ShowDetail | null>(null);
   const [seats, setSeats] = useState<Seat[]>([]);
@@ -23,6 +25,8 @@ export const Booking = () => {
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [holdExpired, setHoldExpired] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   const [guestName, setGuestName] = useState(user?.name ?? '');
   const [guestMobile, setGuestMobile] = useState('');
@@ -35,8 +39,7 @@ export const Booking = () => {
     }
   }, [user]);
 
-  // Reused across retries of the same checkout so a double submit cannot
-  // produce two bookings.
+  // Reused across retries of the same checkout so a double submit cannot produce two bookings.
   const checkoutKey = useRef<string>(crypto.randomUUID());
 
   const loadSeats = useCallback(async () => {
@@ -44,7 +47,9 @@ export const Booking = () => {
     setSeats(data.seats);
     setPriceList(data.categories);
     setHold(data.hold);
-    setSelected(data.hold?.seatIds ?? []);
+    if (data.hold) {
+      setSelected(data.hold.seatIds);
+    }
   }, [showId]);
 
   const loadQueue = useCallback(async () => {
@@ -55,14 +60,15 @@ export const Booking = () => {
 
   useEffect(() => {
     if (!Number.isInteger(showId)) return;
+    setLoading(true);
 
-    api
-      .get<{ show: ShowDetail }>(`/shows/${showId}`)
-      .then(({ show: found }) => setShow(found))
-      .catch(() => setError('That showing could not be found.'));
-
-    loadSeats().catch(() => setError('Could not load the seat map.'));
-    loadQueue().catch(() => undefined);
+    Promise.all([
+      api.get<{ show: ShowDetail }>(`/shows/${showId}`).then(({ show: found }) => setShow(found)),
+      loadSeats(),
+      loadQueue().catch(() => undefined),
+    ])
+      .catch((err) => setError(err instanceof ApiError ? err.message : 'Could not load showing details.'))
+      .finally(() => setLoading(false));
   }, [showId, loadSeats, loadQueue]);
 
   // Live updates from other customers, so the map changes under your cursor.
@@ -72,8 +78,6 @@ export const Booking = () => {
         const change = changes.find((c) => c.id === seat.id);
         if (!change) return seat;
 
-        // The stream is broadcast to everyone, so it must not leak whose hold it
-        // is; only a seat this browser already knows is ours stays ours.
         const stillMine = seat.heldByMe && change.status === 'held';
         return {
           ...seat,
@@ -86,8 +90,6 @@ export const Booking = () => {
     );
   });
 
-  // Recounted from the seats currently on screen, so a streamed change updates
-  // the availability figures and the sold-out list without another request.
   const categories = useMemo(
     () =>
       priceList.map((category) => ({
@@ -99,16 +101,15 @@ export const Booking = () => {
 
   const remaining = useCountdown(hold?.holdExpiresAt ?? null);
 
-  // Put the page back to a clean selecting state when the hold runs out. This
-  // is scheduled from the expiry timestamp rather than watched through the
-  // countdown value, so it cannot fire on the render that sets the hold.
+  // Expired hold handling
   useEffect(() => {
     if (!hold) return;
 
     const expire = () => {
       setHold(null);
       setSelected([]);
-      setInfo('Your seat hold expired, so the seats went back on sale.');
+      setHoldExpired(true);
+      toast('Your seat hold has expired.', 'warning');
       loadSeats().catch(() => undefined);
     };
 
@@ -120,18 +121,28 @@ export const Booking = () => {
 
     const timer = setTimeout(expire, msLeft);
     return () => clearTimeout(timer);
-  }, [hold, loadSeats]);
+  }, [hold, loadSeats, toast]);
 
-  const toggleSeat = (seat: Seat) => {
-    if (hold) return; // seats are locked in once a hold exists
-    setError(null);
-    setSelected((current) =>
-      current.includes(seat.id) ? current.filter((id) => id !== seat.id) : [...current, seat.id]
-    );
-  };
+  const toggleSeat = useCallback(
+    (seat: Seat) => {
+      if (hold) return;
+      setError(null);
+      setHoldExpired(false);
+      setSelected((current) =>
+        current.includes(seat.id) ? current.filter((id) => id !== seat.id) : [...current, seat.id]
+      );
+    },
+    [hold]
+  );
 
-  const selectedSeats = seats.filter((seat) => selected.includes(seat.id));
-  const total = selectedSeats.reduce((sum, seat) => sum + seat.price, 0);
+  const selectedSeats = useMemo(
+    () => seats.filter((seat) => selected.includes(seat.id)),
+    [seats, selected]
+  );
+  const total = useMemo(
+    () => selectedSeats.reduce((sum, seat) => sum + seat.price, 0),
+    [selectedSeats]
+  );
 
   const run = async (action: () => Promise<void>) => {
     setBusy(true);
@@ -140,10 +151,15 @@ export const Booking = () => {
     try {
       await action();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Something went wrong. Please try again.');
+      const msg = err instanceof ApiError ? err.message : 'Something went wrong. Please try again.';
+      setError(msg);
+      toast(msg, 'error');
       if (err instanceof ApiError && ['seat_held', 'seat_booked', 'hold_expired'].includes(err.code)) {
         await loadSeats().catch(() => undefined);
-        if (err.code === 'hold_expired') setHold(null);
+        if (err.code === 'hold_expired') {
+          setHold(null);
+          setHoldExpired(true);
+        }
       }
     } finally {
       setBusy(false);
@@ -152,9 +168,11 @@ export const Booking = () => {
 
   const holdSeats = () =>
     run(async () => {
+      setHoldExpired(false);
       const { hold: created } = await api.post<{ hold: Hold }>(`/shows/${showId}/hold`, { seatIds: selected });
       checkoutKey.current = crypto.randomUUID();
       setHold(created);
+      toast('Seats reserved! Complete checkout before the timer expires.', 'success');
       await loadSeats();
     });
 
@@ -163,14 +181,19 @@ export const Booking = () => {
       await api.del(`/shows/${showId}/hold`);
       setHold(null);
       setSelected([]);
+      setHoldExpired(false);
+      toast('Seats released.', 'info');
       await loadSeats();
     });
 
   const confirmBooking = () =>
     run(async () => {
-      const { booking } = await api.post<{ booking: BookingType }>('/bookings', { showId, guestName, guestMobile, guestEmail }, {
-        'Idempotency-Key': checkoutKey.current,
-      });
+      const { booking } = await api.post<{ booking: BookingType }>(
+        '/bookings',
+        { showId, guestName, guestMobile, guestEmail },
+        { 'Idempotency-Key': checkoutKey.current }
+      );
+      toast('Booking confirmed!', 'success');
       navigate(`/bookings/${booking.id}`, { replace: true });
     });
 
@@ -178,19 +201,40 @@ export const Booking = () => {
     run(async () => {
       await api.post(`/shows/${showId}/waitlist`, { categoryId });
       await loadQueue();
-      setInfo('You are on the waitlist. We will email you if a seat frees up.');
+      const msg = 'You are on the waitlist. We will email you if a seat opens up.';
+      setInfo(msg);
+      toast(msg, 'success');
     });
 
-  if (error && !show) return <Notice kind="error">{error}</Notice>;
-  if (!show) return <p className="muted">Loading...</p>;
+  const handlePickSeatsAgain = () => {
+    setHoldExpired(false);
+    setHold(null);
+    setSelected([]);
+    loadSeats().catch(() => undefined);
+  };
+
+  if (loading && !show) return <SeatMapSkeleton />;
+  if (error && !show) {
+    return (
+      <div className="card empty-state" role="alert">
+        <h2 className="empty-state-title">Showing not found</h2>
+        <p className="muted">{error}</p>
+        <Link className="button" to="/">
+          Browse what's on
+        </Link>
+      </div>
+    );
+  }
+  if (!show) return null;
 
   const signedInCustomer = user?.role === 'customer';
   const offered = queue.find((entry) => entry.status === 'offered');
+  const isUrgent = remaining < 60_000 && remaining > 0;
 
   return (
     <>
       <Link className="back" to={`/events/${show.event.id}`}>
-        Back to {show.event.title}
+        &larr; Back to {show.event.title}
       </Link>
 
       <header className="show-header">
@@ -201,23 +245,45 @@ export const Booking = () => {
         </p>
       </header>
 
-      {error && <Notice kind="error" onDismiss={() => setError(null)}>{error}</Notice>}
-      {info && <Notice kind="info" onDismiss={() => setInfo(null)}>{info}</Notice>}
-
       {offered && (
-        <Notice kind="success">
-          A seat has been reserved for you from the waitlist.{' '}
-          <Link to={`/offer/${offered.offerToken}`}>Claim it now</Link> before the offer expires.
-        </Notice>
+        <div className="notice notice-success" role="status">
+          <span>
+            A seat has opened up for you from the waitlist.{' '}
+            <Link to={`/offer/${offered.offerToken}`}>Claim it now</Link> before the offer expires.
+          </span>
+        </div>
       )}
 
       {!user && (
-        <Notice kind="info">
-          <Link to="/signin" state={{ from: `/shows/${showId}` }}>
-            Sign in
-          </Link>{' '}
-          to hold and book seats.
-        </Notice>
+        <div className="notice notice-info" role="status">
+          <span>
+            <Link to="/signin" state={{ from: `/shows/${showId}` }}>
+              Sign in
+            </Link>{' '}
+            to hold and book seats.
+          </span>
+        </div>
+      )}
+
+      {info && (
+        <div className="notice notice-info" role="status">
+          <span>{info}</span>
+          <button type="button" className="notice-close" onClick={() => setInfo(null)} aria-label="Dismiss">
+            &times;
+          </button>
+        </div>
+      )}
+
+      {holdExpired && (
+        <div className="notice notice-warning expired-banner" role="alert">
+          <div className="expired-content">
+            <strong>Your seat hold has expired.</strong>
+            <p className="small muted">The seats have been released back to general sale.</p>
+          </div>
+          <button type="button" className="button primary small" onClick={handlePickSeatsAgain}>
+            Pick seats again
+          </button>
+        </div>
       )}
 
       <div className="booking-layout">
@@ -230,74 +296,112 @@ export const Booking = () => {
         />
 
         <aside className="card summary">
-          <h2>Your selection</h2>
+          {/* Prominent Countdown when held */}
+          {hold && (
+            <div
+              className={`countdown-card ${isUrgent ? 'countdown-urgent-pulse' : ''}`}
+              role="timer"
+              aria-live="polite"
+              aria-label={`Time remaining to complete booking: ${formatCountdown(remaining)}`}
+            >
+              <div className="countdown-header">
+                <span className="countdown-badge">{isUrgent ? '⚠️ Expiring Soon' : '⏱ Seats Held'}</span>
+                <strong className="countdown-clock">{formatCountdown(remaining)}</strong>
+              </div>
+              <p className="countdown-note small">
+                {isUrgent
+                  ? 'Hurry! Complete checkout before your hold expires.'
+                  : 'Your seats are held. Finish details below to confirm.'}
+              </p>
+            </div>
+          )}
+
+          <h2>Order summary</h2>
 
           {selectedSeats.length === 0 ? (
-            <p className="muted">Pick one or more seats from the map.</p>
+            <div className="selection-empty">
+              <p className="muted small">Select up to 8 seats from the seating map to reserve them.</p>
+            </div>
           ) : (
             <>
-              <ul className="selection">
+              <ul className="selection" aria-label="Selected seats">
                 {selectedSeats.map((seat) => (
                   <li key={seat.id}>
                     <span>
-                      {seat.label} <em className="muted">{seat.category}</em>
+                      <strong>Seat {seat.label}</strong> <em className="muted small">({seat.category})</em>
                     </span>
                     <span>{formatMoney(seat.price)}</span>
                   </li>
                 ))}
               </ul>
-              <p className="total">
+              <div className="total">
                 <span>Total</span>
                 <strong>{formatMoney(hold?.total ?? total)}</strong>
-              </p>
+              </div>
             </>
           )}
 
-          {hold ? (
-            <>
-              <div className={remaining < 60_000 ? 'countdown urgent' : 'countdown'}>
-                <span>Seats held for</span>
-                <strong>{formatCountdown(remaining)}</strong>
-              </div>
-              <p className="muted small">
-                If you leave checkout the seats are released automatically and go back on sale.
-              </p>
-              
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px' }}>
+          {/* Guest Details Form - Visible alongside seat selection */}
+          <section className="guest-details-section">
+            <h3 className="section-title">Guest details</h3>
+            <div className="stack guest-form">
+              <label>
+                Full name
                 <input
                   type="text"
-                  placeholder="Guest Name"
+                  placeholder="e.g. Priya Sharma"
                   value={guestName}
                   onChange={(e) => setGuestName(e.target.value)}
                   disabled={busy}
+                  autoComplete="name"
+                  required
                 />
+              </label>
+              <label>
+                Mobile number
                 <input
                   type="tel"
-                  placeholder="Mobile Number"
+                  placeholder="e.g. +91 98765 43210"
                   value={guestMobile}
                   onChange={(e) => setGuestMobile(e.target.value)}
                   disabled={busy}
+                  autoComplete="tel"
+                  required
                 />
+              </label>
+              <label>
+                Email address
                 <input
                   type="email"
-                  placeholder="Email Address"
+                  placeholder="e.g. priya@example.com"
                   value={guestEmail}
                   onChange={(e) => setGuestEmail(e.target.value)}
                   disabled={busy}
+                  autoComplete="email"
+                  required
                 />
-              </div>
+              </label>
+            </div>
+          </section>
 
-              <button type="button" className="primary" onClick={confirmBooking} disabled={busy || !guestName || !guestMobile || !guestEmail}>
+          {hold ? (
+            <div className="checkout-actions">
+              <button
+                type="button"
+                className="button primary checkout-btn"
+                onClick={confirmBooking}
+                disabled={busy || !guestName.trim() || !guestMobile.trim() || !guestEmail.trim()}
+              >
                 {busy ? 'Confirming...' : 'Confirm booking'}
               </button>
-              <button type="button" className="ghost" onClick={releaseSeats} disabled={busy}>
+              <button type="button" className="button ghost small" onClick={releaseSeats} disabled={busy}>
                 Release seats
               </button>
-            </>
+            </div>
           ) : (
             <button
               type="button"
-              className="primary"
+              className="button primary"
               onClick={holdSeats}
               disabled={!signedInCustomer || busy || selected.length === 0}
             >
@@ -323,12 +427,14 @@ export const Booking = () => {
                       </span>
                       {entry ? (
                         <em className="muted small">
-                          {entry.status === 'offered' ? 'Seat offered to you' : `You are number ${entry.position} in the queue`}
+                          {entry.status === 'offered'
+                            ? 'Seat offered to you'
+                            : `You are #${entry.position} in queue`}
                         </em>
                       ) : (
                         <button
                           type="button"
-                          className="ghost small"
+                          className="button ghost small"
                           onClick={() => joinWaitlist(category.categoryId)}
                           disabled={!signedInCustomer || busy}
                         >

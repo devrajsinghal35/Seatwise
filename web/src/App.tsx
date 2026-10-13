@@ -10,6 +10,7 @@ import { MyBookings } from './pages/MyBookings';
 import { OfferClaim } from './pages/OfferClaim';
 import { Organiser } from './pages/Organiser';
 import { SignIn } from './pages/SignIn';
+import { ToastProvider } from './components/Toast';
 import type { ReactNode } from 'react';
 import type { Role } from './types';
 
@@ -64,43 +65,78 @@ const ParallaxBackground = () => {
   const bgRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!bgRef.current) return;
-      // Calculate offset based on mouse position (max 30px translation)
-      const x = (e.clientX / window.innerWidth - 0.5) * 60;
-      const y = (e.clientY / window.innerHeight - 0.5) * 60;
-      // Negative translates it in the opposite direction of the mouse for a parallax feel
-      bgRef.current.style.transform = `translate(${-x}px, ${-y}px) scale(1.05)`;
+    const mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+    if (mediaQuery.matches) {
+      return;
+    }
+
+    let rafId: number | null = null;
+    let targetX = 0;
+    let targetY = 0;
+    let currentX = 0;
+    let currentY = 0;
+    let isRunning = false;
+
+    const animate = () => {
+      currentX += (targetX - currentX) * 0.08;
+      currentY += (targetY - currentY) * 0.08;
+
+      if (bgRef.current) {
+        bgRef.current.style.transform = `translate3d(${-currentX.toFixed(2)}px, ${-currentY.toFixed(2)}px, 0)`;
+      }
+
+      const diff = Math.abs(targetX - currentX) + Math.abs(targetY - currentY);
+      if (diff > 0.05) {
+        rafId = requestAnimationFrame(animate);
+      } else {
+        isRunning = false;
+      }
     };
-    
-    window.addEventListener('mousemove', handleMouseMove);
-    return () => window.removeEventListener('mousemove', handleMouseMove);
+
+    const handleMouseMove = (e: MouseEvent) => {
+      targetX = (e.clientX / window.innerWidth - 0.5) * 40;
+      targetY = (e.clientY / window.innerHeight - 0.5) * 40;
+
+      if (!isRunning) {
+        isRunning = true;
+        rafId = requestAnimationFrame(animate);
+      }
+    };
+
+    const handleMediaChange = (e: MediaQueryListEvent) => {
+      if (e.matches) {
+        if (rafId) cancelAnimationFrame(rafId);
+        window.removeEventListener('mousemove', handleMouseMove);
+        if (bgRef.current) bgRef.current.style.transform = 'translate3d(0, 0, 0)';
+      } else {
+        window.addEventListener('mousemove', handleMouseMove, { passive: true });
+      }
+    };
+
+    window.addEventListener('mousemove', handleMouseMove, { passive: true });
+    mediaQuery.addEventListener('change', handleMediaChange);
+
+    return () => {
+      if (rafId) cancelAnimationFrame(rafId);
+      window.removeEventListener('mousemove', handleMouseMove);
+      mediaQuery.removeEventListener('change', handleMediaChange);
+    };
   }, []);
 
   return (
-    <div
-      ref={bgRef}
-      style={{
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        width: '100vw',
-        height: '100vh',
-        zIndex: -1,
-        backgroundColor: 'var(--bg)',
-        backgroundImage: "url('https://image.tmdb.org/t/p/original/8Gxv8gSFCU0XGDykEGv7zR1n2ua.jpg')",
-        backgroundSize: 'cover',
-        backgroundPosition: 'center',
-        filter: 'brightness(0.3) blur(2px)', // Dim and slightly blur so UI is readable
-        transition: 'transform 0.1s cubic-bezier(0.25, 0.46, 0.45, 0.94)',
-        willChange: 'transform',
-      }}
-    />
+    <div className="parallax-bg-wrapper" aria-hidden="true">
+      <div ref={bgRef} className="parallax-bg-canvas">
+        <div className="parallax-orb orb-1" />
+        <div className="parallax-orb orb-2" />
+        <div className="parallax-orb orb-3" />
+        <div className="parallax-grid-overlay" />
+      </div>
+    </div>
   );
 };
 
 export const App = () => (
-  <>
+  <ToastProvider>
     <ParallaxBackground />
     <Nav />
 
@@ -152,5 +188,5 @@ export const App = () => (
     <footer className="footer">
       <p className="muted small">SeatWise — seat holds expire automatically and waitlisted seats are offered in turn.</p>
     </footer>
-  </>
+  </ToastProvider>
 );

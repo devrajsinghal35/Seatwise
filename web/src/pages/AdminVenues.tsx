@@ -186,9 +186,55 @@ export const AdminVenues = () => {
               </button>
             </fieldset>
 
-            <p className="muted small">
-              A preview of the layout appears on the seat map as soon as an organiser schedules a showing here.
-            </p>
+            {/* Live Interactive Venue Seat Preview */}
+            <div className="card venue-preview-card" style={{ marginTop: '16px', marginBottom: '16px' }}>
+              <div className="venue-preview-header">
+                <div>
+                  <strong>Live Layout Preview</strong>
+                  <p className="muted small">
+                    {name.trim() || 'New Venue'} {city.trim() ? `(${city.trim()})` : ''} · {totalSeats} seats across {rows.length} rows
+                  </p>
+                </div>
+                <span className="live-badge">Live</span>
+              </div>
+
+              <div className="venue-preview-stage" aria-hidden="true">
+                STAGE / SCREEN
+              </div>
+
+              <div className="venue-preview-grid" role="region" aria-label="Venue layout preview">
+                {rows.map((row, rIdx) => {
+                  const count = Math.min(Math.max(0, Number(row.seats) || 0), 40);
+                  const catColorIndex = Math.max(0, categories.indexOf(row.category)) % 4;
+                  return (
+                    <div key={rIdx} className="venue-preview-row">
+                      <span className="venue-preview-row-label">{row.label || String.fromCharCode(65 + rIdx)}</span>
+                      <div className="venue-preview-seats">
+                        {Array.from({ length: count }).map((_, sIdx) => (
+                          <div
+                            key={sIdx}
+                            className={`venue-preview-seat cat-color-${catColorIndex}`}
+                            title={`Row ${row.label}, Seat ${sIdx + 1} (${row.category})`}
+                          >
+                            {sIdx + 1}
+                          </div>
+                        ))}
+                      </div>
+                      <span className="venue-preview-row-cat muted small">{row.category}</span>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="venue-preview-legend">
+                {categories.filter(Boolean).map((cat, idx) => (
+                  <span key={idx} className="preview-legend-item">
+                    <span className={`preview-legend-swatch cat-color-${idx % 4}`} />
+                    <span>{cat}</span>
+                  </span>
+                ))}
+              </div>
+            </div>
 
             <button type="submit" className="primary" disabled={busy || totalSeats === 0}>
               Create venue

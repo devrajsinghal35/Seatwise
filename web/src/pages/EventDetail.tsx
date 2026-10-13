@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { api } from '../api';
-import { Notice } from '../components/Notice';
+import { EmptyState, ErrorBanner } from '../components/EmptyState';
+import { ShowListSkeleton, Skeleton } from '../components/Skeleton';
 import { formatDate, formatDateTime, formatMoney } from '../format';
 import type { EventDetail as EventDetailType } from '../types';
 
@@ -9,16 +10,48 @@ export const EventDetail = () => {
   const { eventId } = useParams();
   const [event, setEvent] = useState<EventDetailType | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  const loadEvent = useCallback(() => {
+    setLoading(true);
+    setError(null);
     api
       .get<{ event: EventDetailType }>(`/events/${eventId}`)
       .then(({ event: found }) => setEvent(found))
-      .catch(() => setError('That event could not be found.'));
+      .catch(() => setError('That event could not be found.'))
+      .finally(() => setLoading(false));
   }, [eventId]);
 
-  if (error) return <Notice kind="error">{error}</Notice>;
-  if (!event) return <p className="muted">Loading...</p>;
+  useEffect(() => {
+    loadEvent();
+  }, [loadEvent]);
+
+  if (loading && !event) {
+    return (
+      <div className="event-detail-skeleton-wrapper" aria-label="Loading event details...">
+        <Skeleton width={120} height={20} style={{ marginBottom: 16 }} />
+        <Skeleton width={80} height={24} borderRadius={99} style={{ marginBottom: 12 }} />
+        <Skeleton width="60%" height={36} style={{ marginBottom: 12 }} />
+        <Skeleton width="40%" height={20} style={{ marginBottom: 16 }} />
+        <Skeleton width="90%" height={60} style={{ marginBottom: 32 }} />
+        <Skeleton width={140} height={28} style={{ marginBottom: 16 }} />
+        <ShowListSkeleton />
+      </div>
+    );
+  }
+
+  if (error && !event) {
+    return (
+      <div className="narrow">
+        <ErrorBanner message={error} onRetry={loadEvent} />
+        <Link className="button ghost" to="/">
+          &larr; Back to listings
+        </Link>
+      </div>
+    );
+  }
+
+  if (!event) return null;
 
   // Showings are grouped by day so a long run stays readable.
   const byDay = new Map<string, typeof event.shows>();
@@ -30,7 +63,7 @@ export const EventDetail = () => {
   return (
     <>
       <Link className="back" to="/">
-        Back to listings
+        &larr; Back to listings
       </Link>
 
       <header className="event-header">
@@ -46,7 +79,10 @@ export const EventDetail = () => {
       <h2>Showings</h2>
 
       {event.shows.length === 0 ? (
-        <p className="muted">No showings have been scheduled yet.</p>
+        <EmptyState
+          title="No upcoming showings"
+          description="There are currently no scheduled showings for this event. Check back later."
+        />
       ) : (
         [...byDay.entries()].map(([day, shows]) => (
           <section key={day} className="day-group">
