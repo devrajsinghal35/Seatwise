@@ -5,21 +5,35 @@ visual map, seats are held for a limited time while they check out, abandoned
 holds are released automatically, and when a show sells out customers can join a
 per-category waitlist that is served in order when someone cancels.
 
-Two processes: an Express API with a SQLite database, and a React frontend.
-There is no message broker, cache server or background worker to install.
+Two processes: an Express API backed by PostgreSQL (with connection pooling and versioned migrations), and a React frontend.
 
 ## Requirements
 
 - Node.js 20 or newer (`node --version`)
 - npm
-
-Nothing else. SQLite is embedded, so there is no database server to run.
+- PostgreSQL 14 or newer (`postgres://localhost:5432/seatwise`)
 
 ## Setup
 
-Install and start the API:
-
+1. Ensure PostgreSQL is running and create the databases:
+```bash
+createdb seatwise
+createdb seatwise_test
 ```
+
+2. Configure environment variables in `server/.env` (see `server/.env.example`):
+```bash
+cp server/.env.example server/.env
+```
+Default connection string:
+```
+DATABASE_URL=postgres://localhost:5432/seatwise
+TEST_DATABASE_URL=postgres://localhost:5432/seatwise_test
+```
+
+3. Install and seed the API:
+
+```bash
 cd server
 npm install
 npm run seed
@@ -28,19 +42,17 @@ npm start
 
 The API listens on <http://localhost:4000>.
 
-In a second terminal, start the frontend:
+4. In a second terminal, start the frontend:
 
-```
+```bash
 cd web
 npm install
 npm run dev
 ```
 
-Open <http://localhost:5173>. The dev server proxies `/api` to the API, so both
-run on one origin and no CORS configuration is involved.
+Open <http://localhost:5173>. The dev server proxies `/api` to the API.
 
-`npm run seed` loads three venues, four events, six showings and the demo
-accounts below. Re-run it with `npm run seed -- --reset` to start over.
+`npm run seed` migrates the schema and loads three venues, four events, six showings and demo accounts. Re-run it with `npm run seed -- --reset` to start over.
 
 ## Demo accounts
 

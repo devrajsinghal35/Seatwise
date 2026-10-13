@@ -14,7 +14,7 @@ const setUpAdmin = async () => {
   // Admin accounts are never self-serve, so one is inserted directly.
   const { db } = await import('../src/db/index.js');
   const { hashPassword } = await import('../src/lib/passwords.js');
-  db.prepare('INSERT INTO users (email, name, password, role) VALUES (?, ?, ?, ?)')
+  await db.prepare('INSERT INTO users (email, name, password, role) VALUES (?, ?, ?, ?)')
     .run('root@seatwise.test', 'Root', hashPassword('Password123'), 'admin');
 
   const { body } = await api.post('/api/auth/login', { email: 'root@seatwise.test', password: 'Password123' });
@@ -27,6 +27,7 @@ before(async () => {
   organiser = await register(api, 'org@seatwise.test', 'organiser');
   alice = await register(api, 'alice@seatwise.test');
   bob = await register(api, 'bob@seatwise.test');
+
 
   const venue = await api.post(
     '/api/venues',

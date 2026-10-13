@@ -1,12 +1,16 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import pg from 'pg';
+import { config } from '../src/config.js';
+import { getPool, setPool } from '../src/db/index.js';
+import { runMigrations } from '../src/db/migrate.js';
 
 /**
- * Boots the API against a throwaway SQLite file on a random port.
+ * Boots the API against an isolated PostgreSQL schema on a random port.
  *
- * config.js and db/index.js both read their settings at import time, so the
- * environment has to be set before the dynamic imports below.
+ * Each test run creates a unique schema, runs versioned migrations on it,
+ * binds the server pool to that search_path, and drops the schema on close().
  */
 export const startTestServer = async ({
   holdTtlSeconds = 600,
@@ -17,7 +21,25 @@ export const startTestServer = async ({
 } = {}) => {
   const dir = mkdtempSync(join(tmpdir(), 'seatwise-test-'));
 
-  process.env.DATABASE_FILE = join(dir, 'test.db');
+  const testDbUrl = config.testDatabaseUrl;
+  const schema = `test_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+  const rootClient = new pg.Client({ connectionString: testDbUrl });
+  await rootClient.connect();
+  await rootClient.query(`CREATE SCHEMA "${schema}"`);
+
+  await runMigrations({ databaseUrl: testDbUrl, schema });
+
+  const testPool = new pg.Pool({
+    connectionString: testDbUrl,
+    options: `-c search_path=${schema},public`,
+    max: 25,
+  });
+
+  const previousPool = getPool();
+  setPool(testPool);
+
+  process.env.DATABASE_URL = `${testDbUrl}?options=-csearch_path%3D${schema}`;
   process.env.HOLD_TTL_SECONDS = String(holdTtlSeconds);
   process.env.OFFER_TTL_SECONDS = String(offerTtlSeconds);
   process.env.RATE_LIMIT_AUTH_MAX = String(rateLimitAuthMax);
@@ -57,12 +79,19 @@ export const startTestServer = async ({
 
   return {
     base,
+    schema,
     get: (path, opts) => call('GET', path, opts),
     post: (path, body, opts) => call('POST', path, { ...opts, body }),
     del: (path, body, opts) => call('DELETE', path, { ...opts, body }),
     options: (path, opts) => call('OPTIONS', path, opts),
     close: async () => {
       await new Promise((done) => server.close(done));
+      await testPool.end();
+      if (previousPool && previousPool !== testPool) {
+        setPool(previousPool);
+      }
+      await rootClient.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+      await rootClient.end();
       rmSync(dir, { recursive: true, force: true });
     },
   };

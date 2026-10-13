@@ -36,13 +36,24 @@ export const config = {
   jwtSecret: process.env.JWT_SECRET || DEV_JWT_SECRET,
   tokenTtl: process.env.TOKEN_TTL || '12h',
 
-  databaseFile: process.env.DATABASE_FILE || resolve(serverRoot, 'data/seatwise.db'),
+  get databaseUrl() {
+    return process.env.DATABASE_URL || 'postgres://localhost:5432/seatwise';
+  },
+  get testDatabaseUrl() {
+    return process.env.TEST_DATABASE_URL || 'postgres://localhost:5432/seatwise_test';
+  },
 
   // How long a checkout hold survives before the sweeper reclaims the seat.
-  holdTtlSeconds: num(process.env.HOLD_TTL_SECONDS, 600),
+  get holdTtlSeconds() {
+    return num(process.env.HOLD_TTL_SECONDS, 600);
+  },
   // How long a waitlisted customer has to claim a seat that was freed for them.
-  offerTtlSeconds: num(process.env.OFFER_TTL_SECONDS, 300),
-  sweepIntervalSeconds: num(process.env.SWEEP_INTERVAL_SECONDS, 5),
+  get offerTtlSeconds() {
+    return num(process.env.OFFER_TTL_SECONDS, 300);
+  },
+  get sweepIntervalSeconds() {
+    return num(process.env.SWEEP_INTERVAL_SECONDS, 5);
+  },
 
   rateLimit: {
     get authMax() {

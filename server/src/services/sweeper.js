@@ -1,7 +1,11 @@
 import { config } from '../config.js';
+import { getPool } from '../db/index.js';
 import { publishSeatChanges } from './realtime.js';
 import { expireHoldsTxn } from './seats.js';
 import { deliverOffers, expireOffersTxn } from './waitlist.js';
+
+// Dedicated 32-bit integer key for Postgres advisory lock to ensure only one sweeper runs across instances
+export const SWEEPER_LOCK_KEY = 847291038;
 
 const publishGrouped = (changes) => {
   const byShow = new Map();
@@ -17,21 +21,42 @@ const publishGrouped = (changes) => {
  * One pass of the expiry work: abandoned checkout holds are released and
  * unclaimed waitlist offers move down the queue.
  *
+ * Safe across multiple instances via PostgreSQL advisory locking (pg_try_advisory_lock).
+ *
  * Expiry is also evaluated on read (see readSeatMap) and on write (the
  * conditional UPDATEs in the hold and checkout paths), so correctness never
  * depends on this timer having run recently. The sweep exists to push updates
  * out to watching browsers and to keep the stored rows tidy.
  */
 export const runSweep = async () => {
-  const now = Date.now();
+  const client = await getPool().connect();
+  let locked = false;
+  try {
+    const lockRes = await client.query('SELECT pg_try_advisory_lock($1) AS locked', [SWEEPER_LOCK_KEY]);
+    locked = lockRes.rows[0]?.locked === true;
+    if (!locked) {
+      return { skipped: true, holdsReleased: 0, offersExpired: 0 };
+    }
 
-  const holds = expireHoldsTxn(now);
-  const offers = expireOffersTxn(now);
+    const now = Date.now();
 
-  publishGrouped([...holds.changes, ...offers.changes]);
-  await deliverOffers([...holds.offers, ...offers.offers]);
+    const holds = await expireHoldsTxn(now);
+    const offers = await expireOffersTxn(now);
 
-  return { holdsReleased: holds.changes.length, offersExpired: offers.changes.length };
+    publishGrouped([...holds.changes, ...offers.changes]);
+    await deliverOffers([...holds.offers, ...offers.offers]);
+
+    return { holdsReleased: holds.changes.length, offersExpired: offers.changes.length };
+  } finally {
+    try {
+      if (locked) {
+        await client.query('SELECT pg_advisory_unlock($1)', [SWEEPER_LOCK_KEY]);
+      }
+    } catch (err) {
+      console.error('Failed to release sweeper advisory lock:', err.message);
+    }
+    client.release();
+  }
 };
 
 export const startSweeper = () => {

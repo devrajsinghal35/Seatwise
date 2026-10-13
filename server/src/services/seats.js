@@ -4,18 +4,6 @@ import { conflict, notFound } from '../lib/http.js';
 import { publishSeatChanges } from './realtime.js';
 import { deliverOffers, offerFreedSeat } from './waitlist.js';
 
-const seatRows = db.prepare(`
-  SELECT ss.id, ss.status, ss.price, ss.held_by AS heldBy, ss.hold_expires_at AS holdExpiresAt,
-         ss.hold_kind AS holdKind, ss.category_id AS categoryId,
-         s.row_label AS rowLabel, s.seat_number AS seatNumber,
-         c.name AS category
-    FROM show_seats ss
-    JOIN seats s      ON s.id = ss.seat_id
-    JOIN categories c ON c.id = ss.category_id
-   WHERE ss.show_id = ?
-   ORDER BY s.row_label, s.seat_number
-`);
-
 /**
  * Reads the seat map as the given viewer should see it.
  *
@@ -23,10 +11,23 @@ const seatRows = db.prepare(`
  * sweeper has rewritten the row, so the map never shows a seat as taken when
  * the next hold attempt would succeed.
  */
-export const readSeatMap = (showId, viewerId = null) => {
+export const readSeatMap = async (showId, viewerId = null) => {
   const now = Date.now();
 
-  return seatRows.all(showId).map((seat) => {
+  const res = await db.query(
+    `SELECT ss.id, ss.status, ss.price, ss.held_by AS "heldBy", ss.hold_expires_at AS "holdExpiresAt",
+            ss.hold_kind AS "holdKind", ss.category_id AS "categoryId",
+            s.row_label AS "rowLabel", s.seat_number AS "seatNumber",
+            c.name AS category
+       FROM show_seats ss
+       JOIN seats s      ON s.id = ss.seat_id
+       JOIN categories c ON c.id = ss.category_id
+      WHERE ss.show_id = $1
+      ORDER BY s.row_label, s.seat_number`,
+    [showId]
+  );
+
+  return res.rows.map((seat) => {
     const stale = seat.status === 'held' && seat.holdExpiresAt <= now;
     const status = stale ? 'available' : seat.status;
 
@@ -47,58 +48,70 @@ export const readSeatMap = (showId, viewerId = null) => {
   });
 };
 
-export const categorySummary = (showId) =>
-  db
-    .prepare(`SELECT c.id AS categoryId, c.name AS category, sp.price,
-                     COUNT(*) AS total,
-                     SUM(CASE WHEN ss.status = 'available'
-                               OR (ss.status = 'held' AND ss.hold_expires_at <= ?) THEN 1 ELSE 0 END) AS available
-                FROM show_seats ss
-                JOIN categories c  ON c.id = ss.category_id
-                LEFT JOIN show_prices sp ON sp.show_id = ss.show_id AND sp.category_id = ss.category_id
-               WHERE ss.show_id = ?
-               GROUP BY c.id
-               ORDER BY sp.price DESC`)
-    .all(Date.now(), showId);
+export const categorySummary = async (showId) => {
+  const res = await db.query(
+    `SELECT c.id AS "categoryId", c.name AS category, sp.price,
+            COUNT(*)::int AS total,
+            SUM(CASE WHEN ss.status = 'available'
+                      OR (ss.status = 'held' AND ss.hold_expires_at <= $1) THEN 1 ELSE 0 END)::int AS available
+       FROM show_seats ss
+       JOIN categories c  ON c.id = ss.category_id
+       LEFT JOIN show_prices sp ON sp.show_id = ss.show_id AND sp.category_id = ss.category_id
+      WHERE ss.show_id = $2
+      GROUP BY c.id, c.name, sp.price
+      ORDER BY sp.price DESC`,
+    [Date.now(), showId]
+  );
+  return res.rows;
+};
 
 // --- Holding --------------------------------------------------------------
 
-const seatForUpdate = db.prepare(
-  'SELECT id, status, held_by AS heldBy, hold_kind AS holdKind, hold_expires_at AS holdExpiresAt, price FROM show_seats WHERE id = ? AND show_id = ?'
-);
-
-// A conditional UPDATE is the compare-and-swap: the row only moves to "held" if
-// it is still free at write time, so a stale read can never win the seat.
-const claimSeat = db.prepare(`
-  UPDATE show_seats
-     SET status = 'held', held_by = ?, hold_expires_at = ?, hold_kind = 'checkout'
-   WHERE id = ? AND show_id = ?
-     AND (status = 'available'
-          OR (status = 'held' AND hold_kind = 'checkout' AND hold_expires_at <= ?))
-`);
-
 const MAX_SEATS_PER_HOLD = 8;
 
-const holdTxn = writeTxn((showId, userId, seatIds) => {
+const holdTxn = writeTxn(async (client, showId, userId, seatIds) => {
   const now = Date.now();
   const expiresAt = now + config.holdTtlSeconds * 1000;
   const changes = [];
 
+  // Consistent lock ordering: sort seat IDs ascending and lock rows with FOR UPDATE.
+  // Prevents deadlocks when concurrent users race for overlapping seat batches.
+  const sortedSeatIds = [...seatIds].sort((a, b) => a - b);
+  const lockedRows = await client.query(
+    `SELECT id, status, held_by AS "heldBy", hold_kind AS "holdKind",
+            hold_expires_at AS "holdExpiresAt", price
+       FROM show_seats
+      WHERE show_id = $1 AND id = ANY($2::int[])
+      ORDER BY id
+        FOR UPDATE`,
+    [showId, sortedSeatIds]
+  );
+
+  const lockedMap = new Map(lockedRows.rows.map((r) => [r.id, r]));
+
   for (const seatId of seatIds) {
-    if (claimSeat.run(userId, expiresAt, seatId, showId, now).changes === 1) {
+    // Conditional UPDATE is the compare-and-swap:
+    const updateRes = await client.query(
+      `UPDATE show_seats
+          SET status = 'held', held_by = $1, hold_expires_at = $2, hold_kind = 'checkout'
+        WHERE id = $3 AND show_id = $4
+          AND (status = 'available'
+               OR (status = 'held' AND hold_kind = 'checkout' AND hold_expires_at <= $5))`,
+      [userId, expiresAt, seatId, showId, now]
+    );
+
+    if (updateRes.rowCount === 1) {
       changes.push({ id: seatId, status: 'held', holdExpiresAt: expiresAt });
       continue;
     }
 
-    // The swap failed, so work out whether that is a genuine clash or just this
-    // customer clicking the same seat twice.
-    const current = seatForUpdate.get(seatId, showId);
+    const current = lockedMap.get(seatId);
     if (!current) throw notFound(`Seat ${seatId} is not part of this show.`);
 
-    if (current.status === 'held' && current.heldBy === userId) continue; // already ours
+    if (current.status === 'held' && current.heldBy === userId) continue; // already ours and live
 
     // Abandoning the whole selection is kinder than half-holding it, and the
-    // throw rolls back every seat claimed earlier in this loop.
+    // throw rolls back every seat claimed earlier in this transaction.
     throw conflict(
       current.status === 'booked'
         ? 'One of those seats has just been booked. Pick another.'
@@ -107,10 +120,12 @@ const holdTxn = writeTxn((showId, userId, seatIds) => {
     );
   }
 
-  const held = db
-    .prepare(`SELECT id, price FROM show_seats
-               WHERE show_id = ? AND held_by = ? AND status = 'held' AND hold_kind = 'checkout'`)
-    .all(showId, userId);
+  const heldRes = await client.query(
+    `SELECT id, price FROM show_seats
+      WHERE show_id = $1 AND held_by = $2 AND status = 'held' AND hold_kind = 'checkout'`,
+    [showId, userId]
+  );
+  const held = heldRes.rows;
 
   return {
     changes,
@@ -120,14 +135,14 @@ const holdTxn = writeTxn((showId, userId, seatIds) => {
   };
 });
 
-export const holdSeats = (showId, userId, seatIds) => {
+export const holdSeats = async (showId, userId, seatIds) => {
   const unique = [...new Set(seatIds.map(Number))].filter(Number.isInteger);
   if (unique.length === 0) throw conflict('Select at least one seat.', 'no_seats');
   if (unique.length > MAX_SEATS_PER_HOLD) {
     throw conflict(`You can hold at most ${MAX_SEATS_PER_HOLD} seats at a time.`, 'too_many_seats');
   }
 
-  const result = holdTxn(showId, userId, unique);
+  const result = await holdTxn(showId, userId, unique);
   publishSeatChanges(showId, result.changes);
 
   return {
@@ -138,25 +153,21 @@ export const holdSeats = (showId, userId, seatIds) => {
   };
 };
 
-const releaseTxn = writeTxn((showId, userId, seatIds) => {
-  const target = seatIds?.length
-    ? db
-        .prepare(`SELECT id, category_id FROM show_seats
-                   WHERE show_id = ? AND held_by = ? AND status = 'held' AND hold_kind = 'checkout'
-                     AND id IN (${seatIds.map(() => '?').join(',')})`)
-        .all(showId, userId, ...seatIds)
-    : db
-        .prepare(`SELECT id, category_id FROM show_seats
-                   WHERE show_id = ? AND held_by = ? AND status = 'held' AND hold_kind = 'checkout'`)
-        .all(showId, userId);
+const releaseTxn = writeTxn(async (client, showId, userId, seatIds) => {
+  const query = seatIds?.length
+    ? `SELECT id, category_id AS "categoryId" FROM show_seats
+        WHERE show_id = $1 AND held_by = $2 AND status = 'held' AND hold_kind = 'checkout'
+          AND id = ANY($3::int[])`
+    : `SELECT id, category_id AS "categoryId" FROM show_seats
+        WHERE show_id = $1 AND held_by = $2 AND status = 'held' AND hold_kind = 'checkout'`;
+  const params = seatIds?.length ? [showId, userId, seatIds] : [showId, userId];
+  const target = (await client.query(query, params)).rows;
 
   const changes = [];
   const offers = [];
 
   for (const seat of target) {
-    // Someone may already be queued for this category, so the seat goes to the
-    // front of that queue rather than straight back onto the map.
-    const result = offerFreedSeat(seat.id);
+    const result = await offerFreedSeat(client, seat.id);
     if (result.change) changes.push(result.change);
     if (result.offer) offers.push(result.offer);
   }
@@ -166,18 +177,20 @@ const releaseTxn = writeTxn((showId, userId, seatIds) => {
 
 /** Gives up this customer's checkout holds, e.g. when they leave the page. */
 export const releaseHeldSeats = async (showId, userId, seatIds = []) => {
-  const { changes, offers, released } = releaseTxn(showId, userId, seatIds.map(Number).filter(Number.isInteger));
+  const { changes, offers, released } = await releaseTxn(showId, userId, seatIds.map(Number).filter(Number.isInteger));
   publishSeatChanges(showId, changes);
   await deliverOffers(offers);
   return { released };
 };
 
-export const activeHold = (showId, userId) => {
-  const rows = db
-    .prepare(`SELECT id, price, hold_expires_at AS holdExpiresAt FROM show_seats
-               WHERE show_id = ? AND held_by = ? AND status = 'held'
-                 AND hold_kind = 'checkout' AND hold_expires_at > ?`)
-    .all(showId, userId, Date.now());
+export const activeHold = async (showId, userId) => {
+  const res = await db.query(
+    `SELECT id, price, hold_expires_at AS "holdExpiresAt" FROM show_seats
+      WHERE show_id = $1 AND held_by = $2 AND status = 'held'
+        AND hold_kind = 'checkout' AND hold_expires_at > $3`,
+    [showId, userId, Date.now()]
+  );
+  const rows = res.rows;
 
   if (rows.length === 0) return null;
   return {
@@ -189,22 +202,23 @@ export const activeHold = (showId, userId) => {
 
 // --- Expiry sweep ---------------------------------------------------------
 
-const expiredHolds = db.prepare(`
-  SELECT id, show_id AS showId FROM show_seats
-   WHERE status = 'held' AND hold_kind = 'checkout' AND hold_expires_at <= ?
-   ORDER BY id
-`);
-
 /**
  * Releases abandoned checkout holds. Each freed seat is offered to the waitlist
  * first so a queue is never bypassed by whoever refreshes the page fastest.
  */
-export const expireHoldsTxn = writeTxn((now = Date.now()) => {
+export const expireHoldsTxn = writeTxn(async (client, now = Date.now()) => {
+  const res = await client.query(
+    `SELECT id, show_id AS "showId" FROM show_seats
+      WHERE status = 'held' AND hold_kind = 'checkout' AND hold_expires_at <= $1
+      ORDER BY id
+        FOR UPDATE`,
+    [now]
+  );
   const changes = [];
   const offers = [];
 
-  for (const seat of expiredHolds.all(now)) {
-    const result = offerFreedSeat(seat.id);
+  for (const seat of res.rows) {
+    const result = await offerFreedSeat(client, seat.id);
     if (result.change) changes.push({ showId: seat.showId, ...result.change });
     if (result.offer) offers.push(result.offer);
   }

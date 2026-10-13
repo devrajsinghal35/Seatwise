@@ -9,11 +9,11 @@ let adminToken;
 let organiserToken;
 let userSeq = 0;
 
-const createUser = (role = 'customer') => {
+const createUser = async (role = 'customer') => {
   userSeq += 1;
   const email = `concurrency_user_${userSeq}_${Date.now()}@example.com`;
   const insertUser = db.prepare('INSERT INTO users (email, name, password, role) VALUES (?, ?, ?, ?)');
-  const res = insertUser.run(email, `User ${userSeq}`, 'mock_password_hash', role);
+  const res = await insertUser.run(email, `User ${userSeq}`, 'mock_password_hash', role);
   const id = Number(res.lastInsertRowid);
   const user = { id, email, name: `User ${userSeq}`, role };
   const token = signToken(user);
@@ -73,9 +73,9 @@ before(async () => {
 
   ({ db } = await import('../src/db/index.js'));
 
-  const admin = createUser('admin');
+  const admin = await createUser('admin');
   adminToken = admin.token;
-  const organiser = createUser('organiser');
+  const organiser = await createUser('organiser');
   organiserToken = organiser.token;
 });
 
@@ -89,7 +89,7 @@ describe('Concurrency & Contention', () => {
     assert.equal(seats.length, 3);
 
     // Create 50 distinct users
-    const users = Array.from({ length: 50 }, () => createUser('customer'));
+    const users = await Promise.all(Array.from({ length: 50 }, () => createUser('customer')));
 
     // 50 parallel hold requests racing for these 3 seats
     const requests = users.map((u, i) =>
@@ -110,7 +110,7 @@ describe('Concurrency & Contention', () => {
     assert.equal(responses.length, 50);
 
     // Verify database state: each of the 3 seats is held by exactly one user
-    const dbSeats = db
+    const dbSeats = await db
       .prepare('SELECT id, status, held_by FROM show_seats WHERE show_id = ?')
       .all(show.id);
 
@@ -127,8 +127,8 @@ describe('Concurrency & Contention', () => {
     const seatRes = await api.get(`/api/shows/${show.id}/seats`);
     const [s1, s2, s3] = seatRes.body.seats;
 
-    const userA = createUser('customer');
-    const userB = createUser('customer');
+    const userA = await createUser('customer');
+    const userB = await createUser('customer');
 
     // User A holds [s1, s2, s3], User B holds [s3, s2, s1] simultaneously
     const [resA, resB] = await Promise.all([
@@ -143,7 +143,7 @@ describe('Concurrency & Contention', () => {
     const loserUser = resA.status === 200 ? userB : userA;
 
     // Check database state
-    const heldSeats = db
+    const heldSeats = await db
       .prepare('SELECT id, status, held_by FROM show_seats WHERE show_id = ?')
       .all(show.id);
 
@@ -152,9 +152,10 @@ describe('Concurrency & Contention', () => {
     assert.ok(heldSeats.every((s) => s.held_by === winnerUser.id), 'Winner must hold all 3 seats');
 
     // Confirm no partial holds left behind for loser
-    const loserHeldCount = db
+    const loserHeld = await db
       .prepare('SELECT COUNT(*) AS count FROM show_seats WHERE show_id = ? AND held_by = ?')
-      .get(show.id, loserUser.id).count;
+      .get(show.id, loserUser.id);
+    const loserHeldCount = Number(loserHeld.count);
     assert.equal(loserHeldCount, 0, 'Loser must not hold any seats');
   });
 
@@ -163,7 +164,7 @@ describe('Concurrency & Contention', () => {
     const seatRes = await api.get(`/api/shows/${show.id}/seats`);
     const targetSeat = seatRes.body.seats[0];
 
-    const users = Array.from({ length: 20 }, () => createUser('customer'));
+    const users = await Promise.all(Array.from({ length: 20 }, () => createUser('customer')));
 
     // 20 users race to hold and then checkout the single seat concurrently
     const raceResults = await Promise.all(
@@ -205,18 +206,18 @@ describe('Concurrency & Contention', () => {
     assert.equal(failedCheckouts.length, 19);
 
     // Verify bookings and unique index in database
-    const bookingRows = db
+    const bookingRows = await db
       .prepare('SELECT id, show_id, user_id, status FROM bookings WHERE show_id = ?')
       .all(show.id);
     assert.equal(bookingRows.length, 1, 'Exactly one booking row must exist');
     assert.equal(bookingRows[0].status, 'confirmed');
 
-    const bookingSeatRows = db
+    const bookingSeatRows = await db
       .prepare('SELECT booking_id, show_seat_id FROM booking_seats WHERE show_seat_id = ? AND released_at IS NULL')
       .all(targetSeat.id);
     assert.equal(bookingSeatRows.length, 1, 'Unique index idx_seat_one_live_booking must have exactly 1 live row');
 
-    const seatInDb = db.prepare('SELECT status, held_by FROM show_seats WHERE id = ?').get(targetSeat.id);
+    const seatInDb = await db.prepare('SELECT status, held_by FROM show_seats WHERE id = ?').get(targetSeat.id);
     assert.equal(seatInDb.status, 'booked');
     assert.equal(seatInDb.held_by, null);
   });
@@ -227,7 +228,7 @@ describe('Concurrency & Contention', () => {
     const seat = seatRes.body.seats[0];
 
     // Book the seat with user0 so the show is 100% sold out
-    const user0 = createUser('customer');
+    const user0 = await createUser('customer');
     await api.post(`/api/shows/${show.id}/hold`, { seatIds: [seat.id] }, { token: user0.token });
     const bookingRes = await api.post(
       '/api/bookings',
@@ -238,7 +239,7 @@ describe('Concurrency & Contention', () => {
     const bookingId = bookingRes.body.booking.id;
 
     // 10 users join the waitlist in order
-    const waitlistUsers = Array.from({ length: 10 }, () => createUser('customer'));
+    const waitlistUsers = await Promise.all(Array.from({ length: 10 }, () => createUser('customer')));
     for (const u of waitlistUsers) {
       const joinRes = await api.post(
         `/api/shows/${show.id}/waitlist`,
@@ -254,7 +255,7 @@ describe('Concurrency & Contention', () => {
     assert.equal(cancelRes.body.seatsReoffered, 1);
 
     // Verify waitlist in DB: exactly one offer issued, to the earliest queue entry (waitlistUsers[0])
-    const waitlistEntries = db
+    const waitlistEntries = await db
       .prepare('SELECT id, user_id, status FROM waitlist WHERE show_id = ? ORDER BY id')
       .all(show.id);
 
@@ -267,7 +268,7 @@ describe('Concurrency & Contention', () => {
     assert.equal(waitingEntries.length, 9, 'Remaining 9 customers must stay in waiting status');
 
     // Seat in DB should be held with hold_kind = 'offer' for waitlistUsers[0]
-    const offeredSeat = db.prepare('SELECT status, held_by, hold_kind FROM show_seats WHERE id = ?').get(seat.id);
+    const offeredSeat = await db.prepare('SELECT status, held_by, hold_kind FROM show_seats WHERE id = ?').get(seat.id);
     assert.equal(offeredSeat.status, 'held');
     assert.equal(offeredSeat.hold_kind, 'offer');
     assert.equal(offeredSeat.held_by, waitlistUsers[0].id);
@@ -278,16 +279,16 @@ describe('Concurrency & Contention', () => {
     const seatRes = await api.get(`/api/shows/${show.id}/seats`);
     const seat = seatRes.body.seats[0];
 
-    const alice = createUser('customer');
-    const bob = createUser('customer');
-    const charlie = createUser('customer');
+    const alice = await createUser('customer');
+    const bob = await createUser('customer');
+    const charlie = await createUser('customer');
 
     // Alice holds the seat
     const holdAlice = await api.post(`/api/shows/${show.id}/hold`, { seatIds: [seat.id] }, { token: alice.token });
     assert.equal(holdAlice.status, 200);
 
     // Fast-forward hold expiry into the past
-    db.prepare('UPDATE show_seats SET hold_expires_at = ? WHERE id = ?').run(Date.now() - 1000, seat.id);
+    await db.prepare('UPDATE show_seats SET hold_expires_at = ? WHERE id = ?').run(Date.now() - 1000, seat.id);
 
     // Concurrently: Alice attempts checkout (on expired hold), while Bob and Charlie attempt to hold the seat
     const [resAliceCheckout, resBobHold, resCharlieHold] = await Promise.all([
@@ -310,13 +311,14 @@ describe('Concurrency & Contention', () => {
     const winnerId = resBobHold.status === 200 ? bob.id : charlie.id;
 
     // Database verification: seat ends up with exactly one owner
-    const seatInDb = db.prepare('SELECT status, held_by, hold_expires_at FROM show_seats WHERE id = ?').get(seat.id);
+    const seatInDb = await db.prepare('SELECT status, held_by, hold_expires_at FROM show_seats WHERE id = ?').get(seat.id);
     assert.equal(seatInDb.status, 'held');
     assert.equal(seatInDb.held_by, winnerId);
     assert.ok(seatInDb.hold_expires_at > Date.now(), 'Hold expiry must be refreshed into future');
 
     // Verify no bookings were made
-    const bookingsCount = db.prepare('SELECT COUNT(*) AS count FROM bookings WHERE show_id = ?').get(show.id).count;
+    const bookingsCountRow = await db.prepare('SELECT COUNT(*) AS count FROM bookings WHERE show_id = ?').get(show.id);
+    const bookingsCount = Number(bookingsCountRow.count);
     assert.equal(bookingsCount, 0, 'No booking should have been recorded');
   });
 });

@@ -20,7 +20,7 @@ before(async () => {
   customerToken = await register(api, 'security_test@example.com', 'customer');
 
   const { db } = await import('../src/db/index.js');
-  const show = db.prepare('SELECT id FROM shows LIMIT 1').get();
+  const show = await db.prepare('SELECT id FROM shows LIMIT 1').get();
   showId = show?.id ?? 1;
 });
 

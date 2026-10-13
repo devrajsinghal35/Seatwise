@@ -8,8 +8,8 @@ let alice;
 let bob;
 let show;
 
-const expireHoldNow = (seatId) =>
-  db.prepare('UPDATE show_seats SET hold_expires_at = ? WHERE id = ?').run(Date.now() - 1000, seatId);
+const expireHoldNow = async (seatId) =>
+  await db.prepare('UPDATE show_seats SET hold_expires_at = ? WHERE id = ?').run(Date.now() - 1000, seatId);
 
 before(async () => {
   // A two-second hold keeps the real-timer test fast.
@@ -17,7 +17,7 @@ before(async () => {
   ({ db } = await import('../src/db/index.js'));
   const { hashPassword } = await import('../src/lib/passwords.js');
 
-  db.prepare('INSERT INTO users (email, name, password, role) VALUES (?, ?, ?, ?)')
+  await db.prepare('INSERT INTO users (email, name, password, role) VALUES (?, ?, ?, ?)')
     .run('root@seatwise.test', 'Root', hashPassword('Password123'), 'admin');
   const admin = (await api.post('/api/auth/login', { email: 'root@seatwise.test', password: 'Password123' })).body.token;
 
@@ -56,11 +56,12 @@ describe('hold expiry', () => {
     const seat = await firstAvailable();
     await api.post(`/api/shows/${show.id}/hold`, { seatIds: [seat.id] }, { token: alice });
 
-    expireHoldNow(seat.id);
+    await expireHoldNow(seat.id);
 
     // The stored row still says "held", but every reader and writer treats the
     // lapsed hold as free, so the map can never show a stale block.
-    assert.equal(db.prepare('SELECT status FROM show_seats WHERE id = ?').get(seat.id).status, 'held');
+    const heldRow = await db.prepare('SELECT status FROM show_seats WHERE id = ?').get(seat.id);
+    assert.equal(heldRow.status, 'held');
 
     const { body } = await api.get(`/api/shows/${show.id}/seats`, { token: bob });
     assert.equal(body.seats.find((s) => s.id === seat.id).status, 'available');
@@ -69,7 +70,7 @@ describe('hold expiry', () => {
   it('lets another customer take a seat whose hold lapsed', async () => {
     const seat = await firstAvailable();
     await api.post(`/api/shows/${show.id}/hold`, { seatIds: [seat.id] }, { token: alice });
-    expireHoldNow(seat.id);
+    await expireHoldNow(seat.id);
 
     const taken = await api.post(`/api/shows/${show.id}/hold`, { seatIds: [seat.id] }, { token: bob });
     assert.equal(taken.status, 200);
@@ -81,26 +82,27 @@ describe('hold expiry', () => {
   it('refuses to check out against a lapsed hold', async () => {
     const seat = await firstAvailable();
     await api.post(`/api/shows/${show.id}/hold`, { seatIds: [seat.id] }, { token: alice });
-    expireHoldNow(seat.id);
+    await expireHoldNow(seat.id);
 
     const { status, body } = await api.post('/api/bookings', { showId: show.id, guestName: 'Alice', guestMobile: '123', guestEmail: 'alice@example.com' }, { token: alice });
     assert.equal(status, 409);
     assert.equal(body.error, 'hold_expired');
 
     // Nothing may be left half-written by the rejected checkout.
-    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM bookings WHERE show_id = ?").get(show.id).n, 0);
+    const bookingCount = await db.prepare("SELECT COUNT(*) AS n FROM bookings WHERE show_id = ?").get(show.id);
+    assert.equal(bookingCount.n, 0);
   });
 
   it('rewrites the row back to available on the next sweep', async () => {
     const seat = await firstAvailable();
     await api.post(`/api/shows/${show.id}/hold`, { seatIds: [seat.id] }, { token: alice });
-    expireHoldNow(seat.id);
+    await expireHoldNow(seat.id);
 
     const { runSweep } = await import('../src/services/sweeper.js');
     const result = await runSweep();
     assert.ok(result.holdsReleased >= 1);
 
-    const row = db.prepare('SELECT status, held_by, hold_expires_at, hold_kind FROM show_seats WHERE id = ?').get(seat.id);
+    const row = await db.prepare('SELECT status, held_by, hold_expires_at, hold_kind FROM show_seats WHERE id = ?').get(seat.id);
     assert.deepEqual(row, { status: 'available', held_by: null, hold_expires_at: null, hold_kind: null });
   });
 
@@ -124,7 +126,7 @@ describe('hold expiry', () => {
     const { runSweep } = await import('../src/services/sweeper.js');
     await runSweep();
 
-    const row = db.prepare('SELECT status FROM show_seats WHERE id = ?').get(seat.id);
+    const row = await db.prepare('SELECT status FROM show_seats WHERE id = ?').get(seat.id);
     assert.equal(row.status, 'booked', 'a paid seat must never be swept back to available');
   });
 });

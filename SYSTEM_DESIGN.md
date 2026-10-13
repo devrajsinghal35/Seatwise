@@ -94,10 +94,51 @@ Changes reach browsers over server-sent events, one stream per showing, carrying
 only seat id, status and expiry. The holder is never broadcast, so the stream
 cannot leak who is buying what.
 
-## Trade-offs
+## Database & Concurrency Architecture: Migration to PostgreSQL
 
-SQLite means one writer at a time, which is ample for a single venue and buys a
-deployment with no moving parts. PostgreSQL would run the same conditional
-updates unchanged. The sweep and the SSE fan-out assume one API instance; scaling
-out would centralise both. The seat model itself would not change, because every
-guarantee rests on constraints and conditional writes, not process memory.
+SeatWise uses **PostgreSQL 15+** with connection pooling (`pg.Pool`), versioned migrations via `node-pg-migrate`, and fine-grained row-level locking.
+
+### Why PostgreSQL?
+1. **Horizontal Scalability**: Multiple Express API instances can run behind a load balancer without colliding on embedded file locks.
+2. **True Row-Level Locking**: Concurrent operations on different shows or non-overlapping seat selections proceed in parallel without serializing the whole database.
+3. **Multi-Instance Sweeper Coordination**: Sweepers across multiple application instances use PostgreSQL advisory locks (`pg_try_advisory_lock`), ensuring exactly one active sweeper without requiring external distributed lock managers.
+
+### Locking Strategy & Deadlock Prevention
+
+1. **Consistent Lock Ordering (`ORDER BY id FOR UPDATE`)**:
+   For multi-seat holds, all seat IDs in the batch are sorted in strictly ascending numerical order before acquiring row locks:
+   ```sql
+   SELECT id, status, held_by, hold_kind, hold_expires_at, price
+     FROM show_seats
+    WHERE show_id = $1 AND id = ANY($2::int[])
+    ORDER BY id
+      FOR UPDATE;
+   ```
+   If User A requests seats `[1, 2, 3]` and User B requests `[3, 2, 1]`, both acquire locks in order `1 -> 2 -> 3`, eliminating cyclical wait conditions and preventing deadlocks.
+
+2. **Atomic Compare-And-Swap (CAS) Conditional Update**:
+   Seat holds are claimed conditionally in a single SQL operation:
+   ```sql
+   UPDATE show_seats
+      SET status = 'held', held_by = $1, hold_expires_at = $2, hold_kind = 'checkout'
+    WHERE id = $3 AND show_id = $4
+      AND (status = 'available'
+           OR (status = 'held' AND hold_kind = 'checkout' AND hold_expires_at <= $5));
+   ```
+   If `rowCount === 1`, the hold was successfully claimed or re-claimed from a lapsed holder. If `0`, another transaction won the seat and the entire multi-seat transaction is rolled back with a `409 Conflict`.
+
+3. **Bounded Retries on Serialization & Deadlock Codes**:
+   The transaction runner (`withTransaction`) catches retryable PostgreSQL errors (`40001` serialization failure, `40P01` deadlock detected) and retries up to 3 times with exponential backoff and randomized jitter (10–35ms).
+
+4. **Timestamp Storage Strategy**:
+   Hold timestamps are preserved as epoch milliseconds stored in PostgreSQL `BIGINT` (type parser configured with `parseInt(val, 10)`). This prevents timezone and ISO serialization mismatches and maintains zero-overhead compatibility with frontend countdown timers (`expiresAt - Date.now()`).
+
+5. **Partial Unique Indexes**:
+   - `idx_seat_one_live_booking`: `ON booking_seats(show_seat_id) WHERE released_at IS NULL` guarantees at the storage engine level that a seat can never have more than one active booking.
+   - `idx_one_live_waitlist_entry`: `ON waitlist(show_id, category_id, user_id) WHERE status IN ('waiting', 'offered')` prevents duplicate active queue entries.
+
+6. **Advisory Locking for Distributed Sweeper**:
+   ```sql
+   SELECT pg_try_advisory_lock(847291038) AS locked;
+   ```
+   The background sweeper attempts to acquire session lock `847291038`. If another instance is sweeping, it skips immediately without blocking. On completion or error, `pg_advisory_unlock(847291038)` releases the lock in a `finally` block. If an instance crashes, PostgreSQL automatically releases session advisory locks.

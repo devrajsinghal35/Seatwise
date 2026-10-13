@@ -36,7 +36,8 @@ export const errorHandler = (err, req, res, next) => {
   }
 
   // A constraint we deliberately rely on tripping is still a conflict, not a crash.
-  if (err?.code?.startsWith?.('SQLITE_CONSTRAINT')) {
+  // Handles SQLite (SQLITE_CONSTRAINT) and PostgreSQL (class 23 integrity constraint violations like 23505).
+  if (err?.code?.startsWith?.('SQLITE_CONSTRAINT') || err?.code === '23505' || err?.code?.startsWith?.('23')) {
     return res.status(409).json({ error: 'conflict', message: 'That change collided with an existing record.' });
   }
 

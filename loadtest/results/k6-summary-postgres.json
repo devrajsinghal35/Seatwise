@@ -1,0 +1,214 @@
+{
+    "root_group": {
+        "name": "",
+        "path": "",
+        "id": "d41d8cd98f00b204e9800998ecf8427e",
+        "groups": {
+            "teardown": {
+                "path": "::teardown",
+                "id": "a8a9942382e8ffe2e56ef29e664b8229",
+                "groups": {},
+                "checks": {
+                        "teardown: race seat map accessible": {
+                            "path": "::teardown::teardown: race seat map accessible",
+                            "id": "74522beaaf75fb91ad42eef802cab38a",
+                            "passes": 1,
+                            "fails": 0,
+                            "name": "teardown: race seat map accessible"
+                        },
+                        "teardown: mixed seat map accessible": {
+                            "name": "teardown: mixed seat map accessible",
+                            "path": "::teardown::teardown: mixed seat map accessible",
+                            "id": "0ab199969db06561aa9715b13771a483",
+                            "passes": 1,
+                            "fails": 0
+                        }
+                    },
+                "name": "teardown"
+            }
+        },
+        "checks": {
+            "browse events returns 200": {
+                "path": "::browse events returns 200",
+                "id": "70879565c92c624203ceb7a86438a437",
+                "passes": 9334,
+                "fails": 0,
+                "name": "browse events returns 200"
+            },
+            "hold returns 200 or 409": {
+                "path": "::hold returns 200 or 409",
+                "id": "c472546bb5a95ee09b4e22db824fddaa",
+                "passes": 74478,
+                "fails": 0,
+                "name": "hold returns 200 or 409"
+            },
+            "no sqlite busy error": {
+                "name": "no sqlite busy error",
+                "path": "::no sqlite busy error",
+                "id": "d1f8efe3cfd0ecdc268bb1faff5e6eea",
+                "passes": 74478,
+                "fails": 0
+            },
+            "seat map returns 200": {
+                "name": "seat map returns 200",
+                "path": "::seat map returns 200",
+                "id": "a1e990f63fb7d761b0e65988224c29d8",
+                "passes": 9334,
+                "fails": 0
+            },
+            "checkout completes with 201 or 409": {
+                "name": "checkout completes with 201 or 409",
+                "path": "::checkout completes with 201 or 409",
+                "id": "5c675c2d56f47d0d6b12fd228059547d",
+                "passes": 50,
+                "fails": 0
+            },
+            "no unexpected server error": {
+                "path": "::no unexpected server error",
+                "id": "19cced54caf3b0e5342afd6057478155",
+                "passes": 50,
+                "fails": 0,
+                "name": "no unexpected server error"
+            }
+        }
+    },
+    "metrics": {
+        "vus": {
+            "value": 5,
+            "min": 5,
+            "max": 250
+        },
+        "double_bookings": {
+            "count": 0,
+            "rate": 0,
+            "thresholds": {
+                "count == 0": false
+            }
+        },
+        "sqlite_busy_errors": {
+            "count": 0,
+            "rate": 0,
+            "thresholds": {
+                "count == 0": false
+            }
+        },
+        "checkout_successes": {
+            "count": 50,
+            "rate": 1.9912314133481799
+        },
+        "http_req_duration": {
+            "p(95)": 8.168,
+            "avg": 3.314139205321266,
+            "min": 0.178,
+            "med": 2.666,
+            "max": 29.813,
+            "p(90)": 6.748900000000002
+        },
+        "checks": {
+            "fails": 0,
+            "passes": 167726,
+            "value": 1
+        },
+        "data_received": {
+            "rate": 5150875.245767738,
+            "count": 129338941
+        },
+        "http_reqs": {
+            "rate": 4083.298785468312,
+            "count": 102532
+        },
+        "http_req_waiting": {
+            "max": 29.788,
+            "p(90)": 6.738,
+            "p(95)": 8.154,
+            "avg": 3.3029823372215277,
+            "min": 0.171,
+            "med": 2.654
+        },
+        "hold_successes": {
+            "count": 569,
+            "rate": 22.66021348390229
+        },
+        "http_req_receiving": {
+            "max": 1.847,
+            "p(90)": 0.01,
+            "p(95)": 0.018,
+            "avg": 0.007703087816479245,
+            "min": 0.003,
+            "med": 0.006
+        },
+        "iterations": {
+            "count": 83812,
+            "rate": 3337.7817443107533
+        },
+        "http_req_blocked": {
+            "avg": 0.0012969999609896237,
+            "min": 0,
+            "med": 0.001,
+            "max": 1.913,
+            "p(90)": 0.001,
+            "p(95)": 0.002
+        },
+        "http_req_connecting": {
+            "min": 0,
+            "med": 0,
+            "max": 0.39,
+            "p(90)": 0,
+            "p(95)": 0,
+            "avg": 0.0002962977411929934
+        },
+        "http_req_duration{expected_response:true}": {
+            "avg": 2.2248842345378232,
+            "min": 0.178,
+            "med": 1.66,
+            "max": 28.298,
+            "p(90)": 4.597,
+            "p(95)": 5.996199999999998
+        },
+        "vus_max": {
+            "value": 250,
+            "min": 250,
+            "max": 250
+        },
+        "data_sent": {
+            "count": 34454081,
+            "rate": 1372120.9681048535
+        },
+        "http_req_tls_handshaking": {
+            "p(90)": 0,
+            "p(95)": 0,
+            "avg": 0,
+            "min": 0,
+            "med": 0,
+            "max": 0
+        },
+        "http_req_sending": {
+            "min": 0.001,
+            "med": 0.002,
+            "max": 0.727,
+            "p(90)": 0.004,
+            "p(95)": 0.008,
+            "avg": 0.003453780283229092
+        },
+        "iteration_duration": {
+            "max": 148.253167,
+            "p(90)": 102.4438372,
+            "p(95)": 107.66475625,
+            "avg": 59.805744006896276,
+            "min": 50.297,
+            "med": 53.87375
+        },
+        "http_req_failed": {
+            "passes": 83243,
+            "fails": 19289,
+            "thresholds": {
+                "rate < 0.95": false
+            },
+            "value": 0.8118733663636718
+        },
+        "hold_conflicts": {
+            "count": 83243,
+            "rate": 3315.121530826851
+        }
+    }
+}

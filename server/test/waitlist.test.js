@@ -32,7 +32,7 @@ before(async () => {
   const { hashPassword } = await import('../src/lib/passwords.js');
   outbox = config.mail.outbox;
 
-  db.prepare('INSERT INTO users (email, name, password, role) VALUES (?, ?, ?, ?)')
+  await db.prepare('INSERT INTO users (email, name, password, role) VALUES (?, ?, ?, ?)')
     .run('root@seatwise.test', 'Root', hashPassword('Password123'), 'admin');
   const admin = (await api.post('/api/auth/login', { email: 'root@seatwise.test', password: 'Password123' })).body.token;
 
@@ -169,7 +169,7 @@ describe('offer expiry', () => {
     const before = claimLinkFor('carol@seatwise.test');
     assert.ok(before, 'carol should have been emailed a claim link');
 
-    const entry = db.prepare("SELECT id FROM waitlist WHERE status = 'offered'").get();
+    const entry = await db.prepare("SELECT id FROM waitlist WHERE status = 'offered'").get();
     assert.ok(entry, 'carol should have a live offer');
 
     // A fourth customer joins behind carol, then carol lets her window lapse.
@@ -177,13 +177,13 @@ describe('offer expiry', () => {
     const queued = await api.post(`/api/shows/${show.id}/waitlist`, { categoryId }, { token: dave });
     assert.equal(queued.status, 201);
 
-    db.prepare('UPDATE waitlist SET offer_expires_at = ? WHERE id = ?').run(Date.now() - 1000, entry.id);
+    await db.prepare('UPDATE waitlist SET offer_expires_at = ? WHERE id = ?').run(Date.now() - 1000, entry.id);
 
     const { runSweep } = await import('../src/services/sweeper.js');
     const result = await runSweep();
     assert.ok(result.offersExpired >= 1);
 
-    const carolEntry = db.prepare('SELECT status FROM waitlist WHERE id = ?').get(entry.id);
+    const carolEntry = await db.prepare('SELECT status FROM waitlist WHERE id = ?').get(entry.id);
     assert.equal(carolEntry.status, 'expired');
 
     const daveOffer = claimLinkFor('dave@seatwise.test');
@@ -194,8 +194,8 @@ describe('offer expiry', () => {
   });
 
   it('returns the seat to general sale when the queue empties', async () => {
-    const entry = db.prepare("SELECT id FROM waitlist WHERE status = 'offered'").get();
-    db.prepare('UPDATE waitlist SET offer_expires_at = ? WHERE id = ?').run(Date.now() - 1000, entry.id);
+    const entry = await db.prepare("SELECT id FROM waitlist WHERE status = 'offered'").get();
+    await db.prepare('UPDATE waitlist SET offer_expires_at = ? WHERE id = ?').run(Date.now() - 1000, entry.id);
 
     const { runSweep } = await import('../src/services/sweeper.js');
     await runSweep();
