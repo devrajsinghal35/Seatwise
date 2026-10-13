@@ -1,0 +1,123 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: seatwise
+      POSTGRES_USER: seatwise
+      POSTGRES_PASSWORD: seatwise_secret_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U seatwise -d seatwise"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Standard single-instance API service (default profile)
+  api:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DATABASE_URL: postgres://seatwise:seatwise_secret_password@postgres:5432/seatwise
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: production_secure_jwt_secret_seatwise_minimum_32_characters
+      CORS_ORIGINS: http://localhost,http://localhost:5173,http://localhost:80,http://localhost:4000
+      HOLD_TTL_SECONDS: 120
+      OFFER_TTL_SECONDS: 180
+    ports:
+      - "4000:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Frontend static web application (default profile)
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+      - "80:80"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  # --- Multi-replica Load Balanced Profile (`docker compose --profile loadbalanced up`) ---
+  api-1:
+    profiles: ["loadbalanced"]
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DATABASE_URL: postgres://seatwise:seatwise_secret_password@postgres:5432/seatwise
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: production_secure_jwt_secret_seatwise_minimum_32_characters
+      CORS_ORIGINS: http://localhost,http://localhost:5173,http://localhost:80,http://localhost:4000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  api-2:
+    profiles: ["loadbalanced"]
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DATABASE_URL: postgres://seatwise:seatwise_secret_password@postgres:5432/seatwise
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: production_secure_jwt_secret_seatwise_minimum_32_characters
+      CORS_ORIGINS: http://localhost,http://localhost:5173,http://localhost:80,http://localhost:4000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  nginx-lb:
+    profiles: ["loadbalanced"]
+    image: nginx:alpine
+    restart: unless-stopped
+    volumes:
+      - ./nginx-lb.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "4000:4000"
+    depends_on:
+      api-1:
+        condition: service_healthy
+      api-2:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:

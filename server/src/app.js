@@ -10,6 +10,9 @@ import { bookingRoutes } from './routes/booking.js';
 import { catalogueRoutes } from './routes/catalogue.js';
 import { waitlistRoutes } from './routes/waitlist.js';
 
+import swaggerUi from 'swagger-ui-express';
+import { openApiSpec } from './docs/openapi.js';
+
 export const createApp = () => {
   const app = express();
 
@@ -71,6 +74,9 @@ export const createApp = () => {
   app.use('/api', catalogueRoutes);
   app.use('/api', bookingRoutes);
   app.use('/api', waitlistRoutes);
+
+  app.get('/api/docs.json', (req, res) => res.json(openApiSpec));
+  app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(openApiSpec));
 
   app.use('/api', (req, res) => res.status(404).json({ error: 'not_found', message: 'No such endpoint.' }));
 

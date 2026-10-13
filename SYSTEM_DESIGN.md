@@ -147,14 +147,248 @@ SeatWise uses **PostgreSQL 15+** with connection pooling (`pg.Pool`), versioned 
 
 Seat holds and bookings stay strictly in PostgreSQL as the single source of truth. Redis is used solely for inter-instance broadcast and distributed rate limiting:
 
-1. **Pub/Sub SSE Fan-out**:
-   - Each show maps to a Redis pub/sub channel: `seatwise:show:${showId}`.
-   - When any instance writes a seat transition (`publishSeatChanges`), it publishes a message containing `{ seats: [...] }` to that show's Redis channel.
-   - Every active server instance subscribes to the channel when local EventSource clients are connected and fans out the event directly to its connected browser clients.
-   - If `REDIS_URL` is omitted, the service falls back to in-memory local room dispatching.
-   - Browser connections maintain a 25-second comment keep-alive (`: ping\n\n`) to prevent intermediate proxy drops.
 
-2. **Distributed Rate Limiting**:
-   - Rate limit counters use `rate-limit-redis` with Redis key prefixing (`rl:auth:`, `rl:hold:`).
-   - Rate limits are enforced uniformly across all instances behind a load balancer, preventing IP limit evasion via round-robin distribution.
-   - When Redis is absent, limits smoothly fall back to `MemoryStore`.
+## Architectural & Sequence Diagrams
+
+### 1. Hold Reservation & Checkout Flow (CAS Row Lock)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Customer as Customer (Browser)
+    participant API as Express API
+    participant PG as PostgreSQL Primary
+    participant Redis as Redis (Pub/Sub)
+    participant Other as Other Viewers (SSE)
+    participant Mail as Email Outbox/Brevo
+
+    Note over Customer,PG: Phase 1: Hold Reservation (CAS Lock)
+    Customer->>API: POST /api/shows/:id/hold { seatIds: [1, 2] }
+    API->>PG: BEGIN;
+    API->>PG: SELECT ... FROM show_seats WHERE id IN (1, 2) ORDER BY id FOR UPDATE;
+    API->>PG: UPDATE show_seats SET status = 'held', held_by = $user, hold_expires_at = now + 120s WHERE ... AND (status = 'available' OR hold_expires_at <= now);
+    alt All rows updated (CAS Success)
+        API->>PG: COMMIT;
+        API->>Redis: PUBLISH seatwise:show:1 { id: [1, 2], status: 'held' }
+        Redis-->>Other: SSE Event { seats: [{ id: 1, status: 'held' }, { id: 2, status: 'held' }] }
+        API-->>Customer: 200 OK { hold: { id, seatIds: [1, 2], expiresAt } }
+    else Any seat taken (CAS Conflict)
+        API->>PG: ROLLBACK;
+        API-->>Customer: 409 Conflict "Seat A1 is already held"
+    end
+
+    Note over Customer,Mail: Phase 2: Checkout & Ticket Creation
+    Customer->>API: POST /api/bookings (Idempotency-Key: uuid)
+    API->>PG: BEGIN;
+    API->>PG: SELECT ... FROM show_seats WHERE id IN (1, 2) ORDER BY id FOR UPDATE;
+    Note over API,PG: Verify: held_by == customer AND hold_expires_at > now
+    API->>PG: INSERT INTO bookings (...) RETURNING id, reference;
+    API->>PG: INSERT INTO booking_seats (booking_id, show_seat_id, price) VALUES (...);
+    API->>PG: UPDATE show_seats SET status = 'booked', held_by = NULL, hold_expires_at = NULL WHERE id IN (1, 2);
+    API->>PG: COMMIT;
+    API->>Redis: PUBLISH seatwise:show:1 { id: [1, 2], status: 'booked' }
+    Redis-->>Other: SSE Event { seats: [{ id: 1, status: 'booked' }, { id: 2, status: 'booked' }] }
+    API->>Mail: Queue/Send Ticket Confirmation Email (QR code)
+    API-->>Customer: 201 Created { booking: { id, reference } }
+```
+
+### 2. Waitlist Cascade on Booking Cancellation
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor CustomerA as Cancelling Customer
+    participant API as Express API
+    participant PG as PostgreSQL
+    participant Redis as Redis (Pub/Sub)
+    participant Mail as Email Outbox/Brevo
+    actor CustomerB as Waitlisted Customer
+
+    CustomerA->>API: POST /api/bookings/:id/cancel
+    API->>PG: BEGIN;
+    API->>PG: UPDATE booking_seats SET released_at = now WHERE booking_id = :id;
+    API->>PG: UPDATE bookings SET status = 'cancelled' WHERE id = :id;
+    loop For each freed seat
+        API->>PG: SELECT * FROM waitlist WHERE show_id = :show AND category_id = :cat AND status = 'waiting' ORDER BY created_at ASC LIMIT 1 FOR UPDATE;
+        alt Waitlist entry exists (FIFO Queue)
+            API->>PG: UPDATE waitlist SET status = 'offered', offer_token = :token, offer_expires_at = now + 180s WHERE id = :entryId;
+            API->>PG: UPDATE show_seats SET status = 'held', held_by = :userId, hold_kind = 'offer', hold_expires_at = now + 180s WHERE id = :seatId;
+            API->>Mail: Send Offer Email with Claim Link (/offer/:token)
+            Note over Mail,CustomerB: Customer B has 180s to claim seat
+        else Queue is empty
+            API->>PG: UPDATE show_seats SET status = 'available', held_by = NULL, hold_expires_at = NULL WHERE id = :seatId;
+            API->>Redis: PUBLISH seatwise:show:1 { id: seatId, status: 'available' }
+        end
+    end
+    API->>PG: COMMIT;
+    API-->>CustomerA: 200 OK { seatsReoffered: 1 }
+```
+
+### 3. Distributed Deployment Architecture
+
+```mermaid
+graph TD
+    Client1["Browser Client 1 (Customer)"]
+    Client2["Browser Client 2 (Viewer)"]
+    AdminClient["Browser Client 3 (Admin)"]
+
+    subgraph CDN_Static ["Frontend Layer (Port 80 / 5173)"]
+        WebStatic["Nginx Static Web Server (web)"]
+    end
+
+    subgraph LoadBalancer ["Ingress / Reverse Proxy"]
+        NginxLB["Nginx Load Balancer (Port 4000)"]
+    end
+
+    subgraph API_Cluster ["Backend Compute Cluster"]
+        API1["SeatWise API Instance 1 (:4001)"]
+        API2["SeatWise API Instance 2 (:4002)"]
+    end
+
+    subgraph Cache_PubSub ["Distributed Cache & Pub/Sub"]
+        RedisCluster["Redis (ioredis)
+        - Channel: seatwise:show:ID
+        - Store: rate-limit-redis"]
+    end
+
+    subgraph Persistence ["Relational Storage Layer"]
+        PostgresDB[("PostgreSQL 15 Primary
+        - Connection Pool (pg.Pool)
+        - Row-Level Locks (FOR UPDATE)
+        - Partial Unique Indexes
+        - Advisory Sweeper Lock")]
+    end
+
+    Client1 -->|HTTP & REST| WebStatic
+    Client2 -->|HTTP & REST| WebStatic
+    AdminClient -->|HTTP & REST| WebStatic
+
+    WebStatic -->|/api/* Proxy| NginxLB
+    NginxLB -->|Round-Robin| API1
+    NginxLB -->|Round-Robin| API2
+
+    API1 -->|SSE Client Stream| Client1
+    API2 -->|SSE Client Stream| Client2
+
+    API1 <-->|Pub/Sub Fan-out & Rate Limits| RedisCluster
+    API2 <-->|Pub/Sub Fan-out & Rate Limits| RedisCluster
+
+    API1 <-->|Pooled SQL Queries & Row Locks| PostgresDB
+    API2 <-->|Pooled SQL Queries & Row Locks| PostgresDB
+```
+
+### 4. Entity-Relationship (ER) Diagram
+
+```mermaid
+erDiagram
+    VENUES ||--o{ VENUE_CATEGORIES : has
+    VENUES ||--o{ VENUE_ROWS : contains
+    VENUES ||--o{ SHOWS : hosts
+    VENUE_CATEGORIES ||--o{ SHOW_PRICES : priced_in
+    VENUE_CATEGORIES ||--o{ SHOW_SEATS : categorizes
+    EVENTS ||--o{ SHOWS : schedules
+    SHOWS ||--o{ SHOW_SEATS : instantiates
+    SHOWS ||--o{ SHOW_PRICES : defines
+    SHOWS ||--o{ BOOKINGS : books
+    SHOWS ||--o{ WAITLIST : queues
+    USERS ||--o{ BOOKINGS : places
+    USERS ||--o{ WAITLIST : joins
+    BOOKINGS ||--|{ BOOKING_SEATS : includes
+    SHOW_SEATS ||--o{ BOOKING_SEATS : assigned_to
+
+    VENUES {
+        int id PK
+        string name
+        string city
+        timestamptz created_at
+    }
+
+    VENUE_CATEGORIES {
+        int id PK
+        int venue_id FK
+        string name
+    }
+
+    VENUE_ROWS {
+        int id PK
+        int venue_id FK
+        string label
+        int seats
+        int category_id FK
+    }
+
+    EVENTS {
+        int id PK
+        string title
+        string kind
+        string description
+        string language
+        int runtime_min
+        int organiser_id FK
+    }
+
+    SHOWS {
+        int id PK
+        int event_id FK
+        int venue_id FK
+        timestamptz starts_at
+        timestamptz created_at
+    }
+
+    SHOW_SEATS {
+        int id PK
+        int show_id FK
+        string row_label
+        int seat_number
+        int category_id FK
+        string status "available | held | booked"
+        int held_by FK
+        bigint hold_expires_at
+        string hold_kind "checkout | offer"
+        numeric price
+    }
+
+    BOOKINGS {
+        int id PK
+        string reference UK
+        int show_id FK
+        int user_id FK
+        string guest_name
+        string guest_email
+        string guest_mobile
+        numeric amount
+        string status "confirmed | cancelled"
+        string source "cart | waitlist_offer"
+        string idempotency_key UK
+        timestamptz created_at
+    }
+
+    BOOKING_SEATS {
+        int id PK
+        int booking_id FK
+        int show_seat_id FK "idx_seat_one_live_booking UK"
+        numeric price
+        timestamptz released_at
+    }
+
+    WAITLIST {
+        int id PK
+        int show_id FK
+        int category_id FK
+        int user_id FK "idx_one_live_waitlist_entry UK"
+        string status "waiting | offered | claimed | expired | left"
+        string offer_token UK
+        bigint offer_expires_at
+        int offer_seat_id FK
+        timestamptz created_at
+    }
+
+    USERS {
+        int id PK
+        string email UK
+        string password_hash
+        string name
+        string role "customer | organiser | admin"
+        timestamptz created_at
+    }
+```
