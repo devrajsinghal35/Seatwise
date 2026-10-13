@@ -13,9 +13,20 @@ const num = (value, fallback) => {
   return Number.isFinite(parsed) ? parsed : fallback;
 };
 
+export const DEV_JWT_SECRET = 'seatwise-dev-secret-change-me';
+
+const isProduction = process.env.NODE_ENV === 'production';
+if (isProduction && (!process.env.JWT_SECRET || process.env.JWT_SECRET === DEV_JWT_SECRET)) {
+  throw new Error('JWT_SECRET must be set to a secure secret in production.');
+}
+
 export const config = {
   port: num(process.env.PORT, 4000),
-  jwtSecret: process.env.JWT_SECRET || 'seatwise-dev-secret-change-me',
+  corsOrigins: (process.env.CORS_ORIGINS || 'http://localhost:5173')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean),
+  jwtSecret: process.env.JWT_SECRET || DEV_JWT_SECRET,
   tokenTtl: process.env.TOKEN_TTL || '12h',
 
   databaseFile: process.env.DATABASE_FILE || resolve(serverRoot, 'data/seatwise.db'),
@@ -26,11 +37,18 @@ export const config = {
   offerTtlSeconds: num(process.env.OFFER_TTL_SECONDS, 300),
   sweepIntervalSeconds: num(process.env.SWEEP_INTERVAL_SECONDS, 5),
 
+  rateLimit: {
+    authMax: num(process.env.RATE_LIMIT_AUTH_MAX, 10),
+    authWindowMs: num(process.env.RATE_LIMIT_AUTH_WINDOW_MS, 60 * 1000),
+    holdMax: num(process.env.RATE_LIMIT_HOLD_MAX, 30),
+    holdWindowMs: num(process.env.RATE_LIMIT_HOLD_WINDOW_MS, 60 * 1000),
+  },
+
   // Used to build the claim link that goes in the waitlist offer email.
   publicUrl: (process.env.PUBLIC_URL || 'http://localhost:5173').replace(/\/$/, ''),
 
   mail: {
-    from: process.env.MAIL_FROM || 'SeatWise <devrajsinghal61@gmail.com>',
+    from: process.env.MAIL_FROM || 'SeatWise <noreply@seatwise.example>',
     apiKey: process.env.BREVO_API_KEY || '',
     outbox: process.env.MAIL_OUTBOX ? resolve(process.env.MAIL_OUTBOX) : resolve(serverRoot, 'outbox'),
   },

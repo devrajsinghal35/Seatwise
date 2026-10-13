@@ -12,7 +12,9 @@ services:
       - key: JWT_SECRET
         generateValue: true
       - key: MAIL_FROM
-        value: "SeatWise <devrajsinghal61@gmail.com>"
+        value: "SeatWise <noreply@seatwise.example>"
+      - key: CORS_ORIGINS
+        value: "http://localhost:5173"
       - key: BREVO_API_KEY
         sync: false
       - key: PUBLIC_URL
