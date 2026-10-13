@@ -1,0 +1,214 @@
+{
+    "root_group": {
+        "name": "",
+        "path": "",
+        "id": "d41d8cd98f00b204e9800998ecf8427e",
+        "groups": {
+            "teardown": {
+                "groups": {},
+                "checks": {
+                        "teardown: race seat map accessible": {
+                            "name": "teardown: race seat map accessible",
+                            "path": "::teardown::teardown: race seat map accessible",
+                            "id": "74522beaaf75fb91ad42eef802cab38a",
+                            "passes": 1,
+                            "fails": 0
+                        },
+                        "teardown: mixed seat map accessible": {
+                            "name": "teardown: mixed seat map accessible",
+                            "path": "::teardown::teardown: mixed seat map accessible",
+                            "id": "0ab199969db06561aa9715b13771a483",
+                            "passes": 1,
+                            "fails": 0
+                        }
+                    },
+                "name": "teardown",
+                "path": "::teardown",
+                "id": "a8a9942382e8ffe2e56ef29e664b8229"
+            }
+        },
+        "checks": {
+            "browse events returns 200": {
+                "name": "browse events returns 200",
+                "path": "::browse events returns 200",
+                "id": "70879565c92c624203ceb7a86438a437",
+                "passes": 9525,
+                "fails": 0
+            },
+            "hold returns 200 or 409": {
+                "name": "hold returns 200 or 409",
+                "path": "::hold returns 200 or 409",
+                "id": "c472546bb5a95ee09b4e22db824fddaa",
+                "passes": 75936,
+                "fails": 0
+            },
+            "no sqlite busy error": {
+                "id": "d1f8efe3cfd0ecdc268bb1faff5e6eea",
+                "passes": 75936,
+                "fails": 0,
+                "name": "no sqlite busy error",
+                "path": "::no sqlite busy error"
+            },
+            "seat map returns 200": {
+                "name": "seat map returns 200",
+                "path": "::seat map returns 200",
+                "id": "a1e990f63fb7d761b0e65988224c29d8",
+                "passes": 9525,
+                "fails": 0
+            },
+            "checkout completes with 201 or 409": {
+                "name": "checkout completes with 201 or 409",
+                "path": "::checkout completes with 201 or 409",
+                "id": "5c675c2d56f47d0d6b12fd228059547d",
+                "passes": 50,
+                "fails": 0
+            },
+            "no unexpected server error": {
+                "name": "no unexpected server error",
+                "path": "::no unexpected server error",
+                "id": "19cced54caf3b0e5342afd6057478155",
+                "passes": 50,
+                "fails": 0
+            }
+        }
+    },
+    "metrics": {
+        "http_reqs": {
+            "count": 104563,
+            "rate": 4171.798644355951
+        },
+        "http_req_failed": {
+            "passes": 84930,
+            "fails": 19633,
+            "thresholds": {
+                "rate < 0.95": false
+            },
+            "value": 0.8122375983856622
+        },
+        "double_bookings": {
+            "count": 0,
+            "rate": 0,
+            "thresholds": {
+                "count == 0": false
+            }
+        },
+        "http_req_blocked": {
+            "p(95)": 0.003,
+            "avg": 0.0018406797815693052,
+            "min": 0,
+            "med": 0.001,
+            "max": 1.6,
+            "p(90)": 0.002
+        },
+        "http_req_sending": {
+            "p(90)": 0.009,
+            "p(95)": 0.012,
+            "avg": 0.0051531995065165915,
+            "min": 0.001,
+            "med": 0.003,
+            "max": 1.525
+        },
+        "iteration_duration": {
+            "min": 50.4075,
+            "med": 52.339417,
+            "max": 170.406042,
+            "p(90)": 102.327167,
+            "p(95)": 105.027833,
+            "avg": 58.65841325363641
+        },
+        "hold_conflicts": {
+            "count": 84930,
+            "rate": 3388.491711840239
+        },
+        "data_sent": {
+            "count": 35135895,
+            "rate": 1401833.144890956
+        },
+        "hold_successes": {
+            "rate": 21.185553973709723,
+            "count": 531
+        },
+        "http_req_waiting": {
+            "p(90)": 4.843,
+            "p(95)": 6.576,
+            "avg": 2.3192370628233556,
+            "min": 0.211,
+            "med": 1.6,
+            "max": 57.993
+        },
+        "http_req_duration": {
+            "med": 1.619,
+            "max": 58.034,
+            "p(90)": 4.866800000000002,
+            "p(95)": 6.596899999999995,
+            "avg": 2.337006732783139,
+            "min": 0.22
+        },
+        "http_req_connecting": {
+            "med": 0,
+            "max": 0.452,
+            "p(90)": 0,
+            "p(95)": 0,
+            "avg": 0.0003440031368648563,
+            "min": 0
+        },
+        "checks": {
+            "passes": 171024,
+            "fails": 0,
+            "value": 1
+        },
+        "vus": {
+            "value": 4,
+            "min": 4,
+            "max": 250
+        },
+        "vus_max": {
+            "value": 250,
+            "min": 250,
+            "max": 250
+        },
+        "http_req_receiving": {
+            "avg": 0.012616470453220894,
+            "min": 0.003,
+            "med": 0.009,
+            "max": 0.47,
+            "p(90)": 0.023,
+            "p(95)": 0.029
+        },
+        "checkout_successes": {
+            "count": 50,
+            "rate": 1.9948732555282227
+        },
+        "sqlite_busy_errors": {
+            "count": 0,
+            "rate": 0,
+            "thresholds": {
+                "count == 0": false
+            }
+        },
+        "http_req_duration{expected_response:true}": {
+            "avg": 1.5363147252075624,
+            "min": 0.22,
+            "med": 1.116,
+            "max": 58.034,
+            "p(90)": 2.895,
+            "p(95)": 3.957399999999999
+        },
+        "http_req_tls_handshaking": {
+            "p(90)": 0,
+            "p(95)": 0,
+            "avg": 0,
+            "min": 0,
+            "med": 0,
+            "max": 0
+        },
+        "data_received": {
+            "count": 131918256,
+            "rate": 5263204.016206509
+        },
+        "iterations": {
+            "count": 85461,
+            "rate": 3409.677265813949
+        }
+    }
+}

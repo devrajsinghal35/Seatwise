@@ -2,6 +2,8 @@ import express from 'express';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { config, serverRoot, brevoConfigured } from './config.js';
+import { db } from './db/index.js';
+import { getRedisClient } from './lib/redis.js';
 import { errorHandler } from './lib/http.js';
 import { authRoutes } from './routes/auth.js';
 import { bookingRoutes } from './routes/booking.js';
@@ -31,14 +33,39 @@ export const createApp = () => {
 
   app.use(express.json({ limit: '256kb' }));
 
-  app.get('/api/health', (req, res) =>
-    res.json({
-      status: 'ok',
+  app.get('/api/health', async (req, res) => {
+    let postgresStatus = 'ok';
+    try {
+      await db.query('SELECT 1');
+    } catch {
+      postgresStatus = 'down';
+    }
+
+    let redisStatus = 'disabled';
+    if (config.redisUrl) {
+      try {
+        const client = getRedisClient();
+        if (client && (await client.ping()) === 'PONG') {
+          redisStatus = 'ok';
+        } else {
+          redisStatus = 'down';
+        }
+      } catch {
+        redisStatus = 'down';
+      }
+    }
+
+    const isHealthy = postgresStatus === 'ok' && (redisStatus === 'ok' || redisStatus === 'disabled');
+
+    res.status(isHealthy ? 200 : 503).json({
+      status: isHealthy ? 'ok' : 'degraded',
+      postgres: postgresStatus,
+      redis: redisStatus,
       holdTtlSeconds: config.holdTtlSeconds,
       offerTtlSeconds: config.offerTtlSeconds,
       mail: brevoConfigured ? 'brevo' : 'outbox',
-    })
-  );
+    });
+  });
 
   app.use('/api/auth', authRoutes);
   app.use('/api', catalogueRoutes);

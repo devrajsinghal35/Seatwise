@@ -42,6 +42,9 @@ export const config = {
   get testDatabaseUrl() {
     return process.env.TEST_DATABASE_URL || 'postgres://localhost:5432/seatwise_test';
   },
+  get redisUrl() {
+    return process.env.REDIS_URL || null;
+  },
 
   // How long a checkout hold survives before the sweeper reclaims the seat.
   get holdTtlSeconds() {

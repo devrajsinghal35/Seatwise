@@ -18,28 +18,34 @@ export const startTestServer = async ({
   rateLimitAuthMax = 10,
   rateLimitHoldMax = 30,
   corsOrigins = 'http://localhost:5173',
+  redisUrl = process.env.REDIS_URL || '',
+  schema = null,
+  dropSchemaOnClose = true,
 } = {}) => {
   const dir = mkdtempSync(join(tmpdir(), 'seatwise-test-'));
 
   const testDbUrl = config.testDatabaseUrl;
-  const schema = `test_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const targetSchema = schema || `test_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
   const rootClient = new pg.Client({ connectionString: testDbUrl });
   await rootClient.connect();
-  await rootClient.query(`CREATE SCHEMA "${schema}"`);
 
-  await runMigrations({ databaseUrl: testDbUrl, schema });
+  if (!schema) {
+    await rootClient.query(`CREATE SCHEMA "${targetSchema}"`);
+    await runMigrations({ databaseUrl: testDbUrl, schema: targetSchema });
+  }
 
   const testPool = new pg.Pool({
     connectionString: testDbUrl,
-    options: `-c search_path=${schema},public`,
+    options: `-c search_path=${targetSchema},public`,
     max: 25,
   });
 
   const previousPool = getPool();
   setPool(testPool);
 
-  process.env.DATABASE_URL = `${testDbUrl}?options=-csearch_path%3D${schema}`;
+  process.env.DATABASE_URL = `${testDbUrl}?options=-csearch_path%3D${targetSchema}`;
+  process.env.REDIS_URL = redisUrl;
   process.env.HOLD_TTL_SECONDS = String(holdTtlSeconds);
   process.env.OFFER_TTL_SECONDS = String(offerTtlSeconds);
   process.env.RATE_LIMIT_AUTH_MAX = String(rateLimitAuthMax);
@@ -79,7 +85,8 @@ export const startTestServer = async ({
 
   return {
     base,
-    schema,
+    server,
+    schema: targetSchema,
     get: (path, opts) => call('GET', path, opts),
     post: (path, body, opts) => call('POST', path, { ...opts, body }),
     del: (path, body, opts) => call('DELETE', path, { ...opts, body }),
@@ -90,7 +97,9 @@ export const startTestServer = async ({
       if (previousPool && previousPool !== testPool) {
         setPool(previousPool);
       }
-      await rootClient.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+      if (dropSchemaOnClose) {
+        await rootClient.query(`DROP SCHEMA IF EXISTS "${targetSchema}" CASCADE`);
+      }
       await rootClient.end();
       rmSync(dir, { recursive: true, force: true });
     },

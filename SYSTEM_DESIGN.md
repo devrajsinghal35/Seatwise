@@ -142,3 +142,19 @@ SeatWise uses **PostgreSQL 15+** with connection pooling (`pg.Pool`), versioned 
    SELECT pg_try_advisory_lock(847291038) AS locked;
    ```
    The background sweeper attempts to acquire session lock `847291038`. If another instance is sweeping, it skips immediately without blocking. On completion or error, `pg_advisory_unlock(847291038)` releases the lock in a `finally` block. If an instance crashes, PostgreSQL automatically releases session advisory locks.
+
+## Distributed Multi-Instance Real-time (Redis Pub/Sub)
+
+Seat holds and bookings stay strictly in PostgreSQL as the single source of truth. Redis is used solely for inter-instance broadcast and distributed rate limiting:
+
+1. **Pub/Sub SSE Fan-out**:
+   - Each show maps to a Redis pub/sub channel: `seatwise:show:${showId}`.
+   - When any instance writes a seat transition (`publishSeatChanges`), it publishes a message containing `{ seats: [...] }` to that show's Redis channel.
+   - Every active server instance subscribes to the channel when local EventSource clients are connected and fans out the event directly to its connected browser clients.
+   - If `REDIS_URL` is omitted, the service falls back to in-memory local room dispatching.
+   - Browser connections maintain a 25-second comment keep-alive (`: ping\n\n`) to prevent intermediate proxy drops.
+
+2. **Distributed Rate Limiting**:
+   - Rate limit counters use `rate-limit-redis` with Redis key prefixing (`rl:auth:`, `rl:hold:`).
+   - Rate limits are enforced uniformly across all instances behind a load balancer, preventing IP limit evasion via round-robin distribution.
+   - When Redis is absent, limits smoothly fall back to `MemoryStore`.
