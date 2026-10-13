@@ -11,7 +11,8 @@
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
     "seed": "node src/db/seed.js",
-    "test": "node --test"
+    "test": "node --test",
+    "loadtest": "node ../loadtest/run-baseline.js"
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",
